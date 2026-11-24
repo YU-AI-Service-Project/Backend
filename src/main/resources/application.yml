@@ -10,8 +10,21 @@ spring:
   flyway:
     clean-disabled: true
     validate-migration-naming: true
+  mail:
+    properties:
+      "[mail.smtp.connectiontimeout]": 3000
+      "[mail.smtp.timeout]": 5000
+      "[mail.smtp.writetimeout]": 5000
+      "[mail.smtp.starttls.enable]": true
+      "[mail.smtp.starttls.required]": true
 
 wattup:
+  auth:
+    jwt-secret: "${WATTUP_AUTH_JWT_SECRET:}"
+    email-secret: "${WATTUP_AUTH_EMAIL_SECRET:}"
+    mail-from: "${WATTUP_AUTH_MAIL_FROM:}"
+    kakao-app-id: "${WATTUP_AUTH_KAKAO_APP_ID:}"
+    google-client-id: "${WATTUP_AUTH_GOOGLE_CLIENT_ID:}"
   recommendation:
     candidate-limit: "${WATTUP_RECOMMENDATION_CANDIDATE_LIMIT:10}"
   prediction:
