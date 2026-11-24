@@ -7,7 +7,8 @@
 - 완료 범주 A · 공단 HTTP 클라이언트, 메타데이터·상태 적재, 실행 이력, 중복 실행 방지, 재시도·일 한도와 스케줄링. PR [#3](https://github.com/YU-AI-Service-Project/Backend/pull/3)을 `550fd70`으로 Squash Merge했다.
 - 완료 범주 B · 비회원 주변 검색, 상세, 충전기 목록, 현재 상태. PR [#4](https://github.com/YU-AI-Service-Project/Backend/pull/4)를 `7b3cb76`으로 Squash Merge했다.
 - 완료 범주 C · 비회원 단건·배치 도착 예측과 Spring Boot 클라이언트. PR [#5](https://github.com/YU-AI-Service-Project/Backend/pull/5)를 `388e5bd`로 Squash Merge했다. 실제 FastAPI·카카오 연동은 별도 검증 대상이다.
-- 현재 범주 D · `feat/recommendation`. 서버 Top-3 추천과 Android용 통합 응답을 구현했다. [GitHub PR 검색](https://github.com/YU-AI-Service-Project/Backend/pulls?q=is%3Apr+head%3Afeat%2Frecommendation)
+- 완료 범주 D · 서버 Top-3 추천과 Android용 통합 응답. PR [#6](https://github.com/YU-AI-Service-Project/Backend/pull/6)을 `a3fcb9c`로 Squash Merge했다.
+- 현재 범주 E · `feat/auth`. 소셜 로그인, 약관, 토큰·세션, 이메일 가입·비밀번호 API 14개를 구현했다. [GitHub PR 검색](https://github.com/YU-AI-Service-Project/Backend/pulls?q=is%3Apr+head%3Afeat%2Fauth)
 - 범주 A는 수집 내부 서비스에 집중한다. 관리자 HTTP 49–51은 인증·운영 정책과 함께 H에서 제공한다. 공단 실연동은 인증키와 실호출 승인 후 검증한다.
 - FastAPI 추론 경로 47·48의 소유자는 AI 서버다. Spring Boot는 계약 및 호출 클라이언트를 담당한다. 52번 AI 연결 상태는 Spring Boot 소유다.
 - 각 범주의 CI와 병합 상태는 해당 PR을 기준으로 기록한다.
@@ -44,7 +45,16 @@
 - 구현한 검토용 점수는 0–1로 정규화했다. 도착 확률 50%, 최근 가용 대수 비율 25%, 반경 대비 직선거리 20%, 적합 충전기 최대 출력 5%를 더한다. 거리 점수는 `1 − 직선거리 / 반경`, 출력 점수는 `min(출력 / 350kW, 1)`이다. 동점은 직선거리와 충전소 ID 순으로 처리한다. 카카오 도로 거리와 ETA는 응답에 제공하며 후보 간 거리 지표는 같은 기준으로 비교한다.
 - 확률을 확인할 수 없는 후보가 있으면 모든 후보에 현재 상태·직선거리·출력의 같은 기준을 적용한다. 확인한 확률은 화면에 제공하고, 확인하지 못한 확률은 `null`을 유지한다. 최소 출력 때문에 모델의 전체 프로필과 후보 충전기 집합이 달라지거나 조회 사이에 인벤토리 버전이 바뀌는 경우에도 같은 폴백을 사용한다. 이 가중치와 폴백 정책은 팀 승인 전 검토안이다.
 - 로컬 Java 25·MySQL 8.4에서 전체 테스트 46개가 통과했다. HTTP/MySQL과 루프백 테스트에서 빈 결과, 최대 3곳, 필터·동점·최신성, 1·10·30건의 배치 및 일부 장애, 경로 시간 제한을 확인했다. 해당 실행의 루프백 테스트 케이스 소요 시간은 각각 16·10·14ms였다. 실제 카카오·FastAPI 운영 연동과 Android 실기기는 별도 검증 대상이다.
-- 다음 범주는 E의 소셜 로그인과 세션이다. 이메일 가입 여부와 실제 OAuth 자격증명 확정 상태를 확인한다.
+- [PR CI](https://github.com/YU-AI-Service-Project/Backend/actions/runs/45366254821)에서 전체 테스트 46개가 통과했다.
+
+## 범주 E 검증과 인계
+
+- Flyway V4에서 회원·약관·소셜·이메일·토큰·요청 제한 테이블을 만들고 V5에서 공급자 사용자 ID를 대소문자까지 구분한다. V1–V3를 재사용한다.
+- 업체 확인은 카카오 앱 ID·토큰 소유자 대조와 Google 서명·발급자·클라이언트·만료 검증을 거친다. 계정 연결은 공급자와 사용자 ID로 결정한다. [카카오 로그인 REST](https://developers.kakao.com/docs/ko/kakaologin/rest-api) · [Google ID 토큰 검증](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token)
+- 액세스 JWT 인증 때 세션과 사용자 상태를 확인한다. 갱신, 재사용 탐지, 로그아웃, 비밀번호 갱신은 사용자 행 잠금으로 직렬화한다. OAuth 토큰은 저장하지 않는다. 갱신 토큰과 티켓은 해시, 이메일 인증 코드는 HMAC, 비밀번호는 BCrypt로 저장한다.
+- 이메일 가입 코드 실패와 재발송 제한, 갱신 토큰 동시 제출, 토큰·티켓 재사용, 만료, 비회원 조회를 테스트한다. 이메일 재설정은 새 요청이 기존 토큰을 폐기하지 않으며, 비밀번호 갱신 시 남은 토큰을 한 번에 폐기한다.
+- Java 25·MySQL 8.4에서 `mvnw.cmd clean verify` 전체 59개 통과, 실패·건너뜀 0개.
+- 실제 OAuth 앱, SMTP 전달, 팀 약관 문서 배포와 Android 연동은 별도 확인이 필요하다. 다음 범주는 F의 회원 관리와 탈퇴다.
 
 ## API 52개 추적표
 
@@ -65,20 +75,20 @@
 | 11 | `GET /api/charging-stations/{stationId}/turnover` | 관측 기준 회전율 | 확장 | H | 미구현 | — |
 | 12 | `GET /api/charging-stations/{stationId}/prediction-quality` | 예측과 관측 결과 비교 | 확장 | H | 미구현 | — |
 | 13 | `GET /api/areas/charging-availability` | 주변 충전 여건 요약 | 확장 | H | 미구현 | — |
-| 14 | `GET /api/auth/agreements` | 가입에 필요한 약관·버전 안내 | 계정 협의 | E | 미구현 | — |
-| 15 | `POST /api/auth/social/kakao` | 카카오 토큰 검증·기존 로그인/신규 가입 안내 | 계정 협의 | E | 미구현 | — |
-| 16 | `POST /api/auth/social/google` | Google ID 토큰 검증·기존 로그인/신규 가입 안내 | 계정 협의 | E | 미구현 | — |
-| 17 | `POST /api/auth/social/signup` | 최초 소셜 회원가입 확정 | 계정 협의 | E | 미구현 | — |
-| 18 | `POST /api/auth/refresh` | Access Token 재발급·Refresh Token 회전 | 계정 협의 | E | 미구현 | — |
-| 19 | `POST /api/auth/logout` | 현재 기기 로그아웃 | 계정 협의 | E | 미구현 | — |
-| 20 | `POST /api/auth/logout-all` | 모든 기기 로그아웃 | 계정 협의 | E | 미구현 | — |
-| 21 | `POST /api/auth/email/verifications` | 회원가입용 이메일 인증 메일 발송·재발송 | 이메일 선택 | E | 미구현 | — |
-| 22 | `POST /api/auth/email/verifications/confirm` | 회원가입용 이메일 인증 코드 확인 | 이메일 선택 | E | 미구현 | — |
-| 23 | `POST /api/auth/signup/email` | 일반 이메일 회원가입 | 이메일 선택 | E | 미구현 | — |
-| 24 | `POST /api/auth/login/email` | 이메일·비밀번호 로그인 | 이메일 선택 | E | 미구현 | — |
-| 25 | `POST /api/auth/password-resets` | 비밀번호 재설정 메일 발송 | 이메일 선택 | E | 미구현 | — |
-| 26 | `POST /api/auth/password-resets/confirm` | 비밀번호 재설정 확정 | 이메일 선택 | E | 미구현 | — |
-| 27 | `PATCH /api/users/me/password` | 로그인 후 비밀번호 변경 | 이메일 선택 | E | 미구현 | — |
+| 14 | `GET /api/auth/agreements` | 가입에 필요한 약관·버전 안내 | 계정 협의 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 15 | `POST /api/auth/social/kakao` | 카카오 토큰 검증·기존 로그인/신규 가입 안내 | 계정 협의 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 16 | `POST /api/auth/social/google` | Google ID 토큰 검증·기존 로그인/신규 가입 안내 | 계정 협의 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 17 | `POST /api/auth/social/signup` | 최초 소셜 회원가입 확정 | 계정 협의 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 18 | `POST /api/auth/refresh` | Access Token 재발급·Refresh Token 회전 | 계정 협의 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 19 | `POST /api/auth/logout` | 현재 기기 로그아웃 | 계정 협의 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 20 | `POST /api/auth/logout-all` | 모든 기기 로그아웃 | 계정 협의 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 21 | `POST /api/auth/email/verifications` | 회원가입용 이메일 인증 메일 발송·재발송 | 이메일 선택 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 22 | `POST /api/auth/email/verifications/confirm` | 회원가입용 이메일 인증 코드 확인 | 이메일 선택 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 23 | `POST /api/auth/signup/email` | 일반 이메일 회원가입 | 이메일 선택 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 24 | `POST /api/auth/login/email` | 이메일·비밀번호 로그인 | 이메일 선택 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 25 | `POST /api/auth/password-resets` | 비밀번호 재설정 메일 발송 | 이메일 선택 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 26 | `POST /api/auth/password-resets/confirm` | 비밀번호 재설정 확정 | 이메일 선택 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 27 | `PATCH /api/users/me/password` | 로그인 후 비밀번호 변경 | 이메일 선택 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
 | 28 | `GET /api/users/me` | 내 정보 조회 | 계정 협의 | F | 미구현 | — |
 | 29 | `PATCH /api/users/me` | 닉네임·프로필 수정 | 계정 협의 | F | 미구현 | — |
 | 30 | `POST /api/users/me/reauthentication` | 중요한 계정 작업 전 본인 재확인 | 계정 협의 | F | 미구현 | — |
