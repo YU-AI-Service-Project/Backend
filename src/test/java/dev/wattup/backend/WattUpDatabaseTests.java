@@ -33,7 +33,8 @@ class WattUpDatabaseTests {
                     "charging_stations", "chargers", "collection_runs", "collection_run_pages",
                     "charger_status_observations", "charger_current_status", "charger_state_changes",
                     "users", "agreement_policies", "user_consents", "user_social_accounts", "user_email_credentials",
-                    "user_refresh_sessions", "auth_email_challenges", "auth_action_tickets", "auth_request_buckets");
+                    "user_refresh_sessions", "auth_email_challenges", "auth_action_tickets", "auth_request_buckets",
+                    "user_favorites", "user_preferences", "auth_social_proof_slots");
             assertThat(jdbc.queryForObject("""
                     SELECT COUNT(*) FROM flyway_schema_history WHERE version = '1' AND success = TRUE
                     """, Long.class)).isEqualTo(1L);
