@@ -85,7 +85,7 @@ class PredictionApiTests {
         http.perform(get("/api/charging-stations/{id}/prediction", STATION).param("profile", "WRONG"))
                 .andExpect(status().is(422)).andExpect(jsonPath("$.error.code").value("UNSUPPORTED_PROFILE"));
         when(history.load(eq(List.of(STATION)), eq(ChargerProfile.AC_SLOW), any()))
-                .thenReturn(Map.of(STATION, new EtaHistoryRepository.Candidate(35.1, 128.2, NOW, Map.of())));
+                .thenReturn(Map.of(STATION, new EtaHistoryRepository.Candidate(35.1, 128.2, NOW, null, Map.of(), Map.of())));
         http.perform(get("/api/charging-stations/{id}/prediction", STATION).param("profile", "AC_SLOW")
                         .param("originLatitude", "35.2").param("originLongitude", "128.3"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.prediction.status").value("INPUT_INCOMPLETE"))
@@ -98,7 +98,7 @@ class PredictionApiTests {
     void distinguishesStaleCollectionFromMissingHistory() throws Exception {
         when(history.load(eq(List.of(STATION)), eq(ChargerProfile.AC_SLOW), any()))
                 .thenReturn(Map.of(STATION, new EtaHistoryRepository.Candidate(
-                        35.1, 128.2, NOW.minusSeconds(631), Map.of())));
+                        35.1, 128.2, NOW.minusSeconds(631), null, Map.of(), Map.of())));
         http.perform(get("/api/charging-stations/{id}/prediction", STATION).param("profile", "AC_SLOW")
                         .param("originLatitude", "35.2").param("originLongitude", "128.3"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.prediction.status").value("STALE_FEATURES"))
@@ -112,7 +112,8 @@ class PredictionApiTests {
         var firstThirty = ids.subList(0, 30);
         var json = new JsonMapper();
         var origin = Map.of("latitude", 35.2, "longitude", 128.3);
-        var candidate = new EtaHistoryRepository.Candidate(35.1, 128.2, NOW.minusSeconds(180), Map.of("totalCount", 1));
+        var candidate = new EtaHistoryRepository.Candidate(
+                35.1, 128.2, NOW.minusSeconds(180), null, Map.of(), Map.of("totalCount", 1));
         when(history.load(eq(firstThirty), eq(ChargerProfile.AC_SLOW), any()))
                 .thenReturn(firstThirty.stream().collect(Collectors.toMap(Function.identity(), id -> candidate)));
         when(routes.find(35.2, 128.3, 35.1, 128.2))
@@ -139,7 +140,7 @@ class PredictionApiTests {
     private void stationWithHistory() {
         when(history.load(any(), eq(ChargerProfile.AC_SLOW), eq(NOW.minusSeconds(180))))
                 .thenReturn(Map.of(STATION, new EtaHistoryRepository.Candidate(
-                        35.1, 128.2, NOW.minusSeconds(180), Map.of("totalCount", 1))));
+                        35.1, 128.2, NOW.minusSeconds(180), null, Map.of(), Map.of("totalCount", 1))));
         when(routes.find(35.2, 128.3, 35.1, 128.2))
                 .thenReturn(Optional.of(new KakaoRouteClient.Route(600, 4000, NOW, NOW)));
     }
