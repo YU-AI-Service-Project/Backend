@@ -4,10 +4,11 @@
 
 - 기존 Docs 원본, API 명세 v3.0, DB 설계 및 ETA v4 ZIP과 멘토링 3회차 기록을 기준으로 사용한다. 화면 API 통합과 Android 정렬은 변경 제안으로 유지하고 기존 서버 Top-3 계약은 유지한다.
 - 초기 개발 환경·MySQL Flyway V1·CI는 PR [#1](https://github.com/YU-AI-Service-Project/Backend/pull/1)의 병합 커밋 `6ff8050`을 기준으로 재사용한다.
-- 현재 범주 A · `feat/data-collection-clean`. 공단 HTTP 클라이언트, 메타데이터·상태 적재, 실행 이력, 중복 실행 방지, 재시도·일 한도와 스케줄링을 구현했다. [GitHub PR 검색](https://github.com/YU-AI-Service-Project/Backend/pulls?q=is%3Apr+head%3Afeat%2Fdata-collection-clean)
+- 완료 범주 A · 공단 HTTP 클라이언트, 메타데이터·상태 적재, 실행 이력, 중복 실행 방지, 재시도·일 한도와 스케줄링. PR [#3](https://github.com/YU-AI-Service-Project/Backend/pull/3)을 `550fd70`으로 Squash Merge했다.
+- 현재 범주 B · `feat/charging-station-read`. 비회원 주변 검색, 상세, 충전기 목록, 현재 상태를 구현했다. [GitHub PR 검색](https://github.com/YU-AI-Service-Project/Backend/pulls?q=is%3Apr+head%3Afeat%2Fcharging-station-read)
 - 범주 A는 수집 내부 서비스에 집중한다. 관리자 HTTP 49–51은 인증·운영 정책과 함께 H에서 제공한다. 공단 실연동은 인증키와 실호출 승인 후 검증한다.
 - FastAPI 추론 경로 47·48의 소유자는 AI 서버다. Spring Boot는 계약 및 호출 클라이언트를 담당한다. 52번 AI 연결 상태는 Spring Boot 소유다.
-- 범주 A의 병합이 승인 대기일 경우 그 상태를 기록한다. 같은 기능의 PR을 중복 생성하지 않는다.
+- 각 범주의 CI와 병합 상태는 해당 PR을 기준으로 기록한다.
 
 ## 범주 A 검증과 인계
 
@@ -15,7 +16,15 @@
 - Flyway V2는 일 한도와 지연 관측 구분, V3는 지역별 인벤토리 수집 실행을 추가한다. V1은 기존 파일을 사용한다.
 - Java 25·MySQL 8.4에서 `mvnw.cmd clean verify` 성공. 로컬 15개 통과, 실패·건너뜀 0개. 공단 인증키와 실호출 승인 확인 전까지 실제 API 및 대량 적재 처리 시간은 미검증 상태다.
 - 실행 중 수집기 영구 중단이 있으면 다음 정상 실행이 미완료 실행을 종료한다. 상태 집계와 향후 AI 특징 생성은 완전한 수집 실행과 최신 상태에 반영된 관측을 기준으로 한다.
-- 병합과 CI 결과는 GitHub PR을 기준으로 확인한다. 범주 B는 최신 `main`에서 비회원 주변 검색, 상세, 충전기 목록, 현재 상태 순으로 구현한다.
+- [PR CI](https://github.com/YU-AI-Service-Project/Backend/actions/runs/45346380164)에서 새 MySQL에 V1–V3 적용과 테스트 15개 통과를 확인했다.
+
+## 범주 B 검증과 인계
+
+- 기존 스키마를 JDBC로 조회한다. 새 Flyway 마이그레이션은 없다.
+- 목록 요청은 반경과 충전기 조건에 맞는 전체 충전소 수와 거리순 결과를 반환한다. 상세는 충전기와 집계 상태를 함께 반환한다.
+- 10분 이상 된 관측에는 지연을 표시하고, 관측 시각이 없는 충전기는 상태 미확인으로 집계한다. `availableOnly`는 10분 이내 가용 관측이 있는 충전소만 선택한다.
+- Java 25·MySQL 8.4에서 `mvnw.cmd clean verify`로 전체 테스트 21개가 통과했다. HTTP 테스트는 4개 경로, 필터, 오류 응답, 최신성, 비공개 충전기 제외를 검증한다. Android 실기기 테스트는 미실행이다.
+- 다음 범주는 C의 경로 ETA, 특징 생성, FastAPI 배치 계약이다. 운영 ETA와 AI 주소·인증 정책은 해당 범주에서 확인한다.
 
 ## API 52개 추적표
 
@@ -23,10 +32,10 @@
 
 | # | 기준 Method·URI | 기능 | 명세 분류 | 범주 | 상태 | 적용·소스·테스트 |
 | ---: | --- | --- | --- | --- | --- | --- |
-| 1 | `GET /api/charging-stations` | 주변 충전소 목록·필터·정렬 | 핵심 | B | 미구현 | — |
-| 2 | `GET /api/charging-stations/{stationId}` | 충전소 상세 | 핵심 | B | 미구현 | — |
-| 3 | `GET /api/charging-stations/{stationId}/chargers` | 충전기별 구성·상태 목록 | 핵심 | B | 미구현 | — |
-| 4 | `GET /api/charging-stations/{stationId}/status` | 최신 상태·가용 대수·갱신 시각 | 핵심 | B | 미구현 | — |
+| 1 | `GET /api/charging-stations` | 주변 충전소 목록·필터·정렬 | 핵심 | B | 구현됨 | [Controller](../../src/main/java/dev/wattup/backend/station/ChargingStationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/station/ChargingStationApiTests.java) |
+| 2 | `GET /api/charging-stations/{stationId}` | 충전소 상세 | 핵심 | B | 구현됨 | [Controller](../../src/main/java/dev/wattup/backend/station/ChargingStationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/station/ChargingStationApiTests.java) |
+| 3 | `GET /api/charging-stations/{stationId}/chargers` | 충전기별 구성·상태 목록 | 핵심 | B | 구현됨 | [Controller](../../src/main/java/dev/wattup/backend/station/ChargingStationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/station/ChargingStationApiTests.java) |
+| 4 | `GET /api/charging-stations/{stationId}/status` | 최신 상태·가용 대수·갱신 시각 | 핵심 | B | 구현됨 | [Controller](../../src/main/java/dev/wattup/backend/station/ChargingStationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/station/ChargingStationApiTests.java) |
 | 5 | `GET /api/charging-stations/{stationId}/prediction` | 충전소 단건 예측 | 핵심 | C | 미구현 | — |
 | 6 | `POST /api/predictions/batch` | 지도/목록용 다중 충전소 예측 | 핵심 | C | 미구현 | — |
 | 7 | `GET /api/recommendations` | 최대 3곳 추천·추천 근거 | 핵심 | D | 미구현 | — |

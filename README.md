@@ -62,3 +62,16 @@ GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, INDEX, REFERENCES
 페이지의 원천 건수·번호·ID 중복을 확인한 뒤 한 트랜잭션으로 반영합니다. 일 한도는 한국 시각 기준이며, 재시도도 포함합니다. 늦거나 수집 시각보다 미래인 원천 상태는 이력에 남기고 최신 상태 갱신에서 제외합니다. Flyway V2는 일 요청 카운터와 관측의 최신 상태 반영 여부를 추가합니다. V3는 지역별 전체 스냅샷에서 빠진 충전기를 비활성화할 수 있도록 마지막 메타데이터 수집 실행을 기록합니다. 이전 관측과 충전기 기록은 보존합니다.
 
 테스트에서는 루프백 HTTP 서버의 응답과 격리 MySQL을 사용합니다. 수집기가 실제 공단 API를 호출하도록 설정하려면 [공공데이터포털 서비스](https://www.data.go.kr/data/15076352/openapi.do)의 권한과 호출 한도를 확인해야 합니다.
+
+## 비회원 충전소 조회
+
+| 경로 | 응답과 파라미터 |
+| --- | --- |
+| `GET /api/charging-stations` | 필수 `latitude`, `longitude`. 선택 `radiusM`(기본 3000, 범위 100–10000), `limit`(기본 30, 범위 1–100), `profile`, 반복 `chargerTypes`, `minOutputKw`, `availableOnly`. `sort`는 `DISTANCE`를 지원한다. `total`은 결과 제한 전의 충전소 수다. |
+| `GET /api/charging-stations/{stationId}` | 기본 정보와 충전기 목록, 상태 집계를 함께 반환한다. 선택 `profile`. |
+| `GET /api/charging-stations/{stationId}/chargers` | 충전기 목록. 선택 `profile`, `typeCode`, `minOutputKw`. |
+| `GET /api/charging-stations/{stationId}/status` | 상태만 갱신할 때 사용한다. 선택 `profile`. |
+
+예시 요청은 `/api/charging-stations?latitude=35.834&longitude=128.751&profile=DC_COMBO&minOutputKw=50`이다. 프로필은 기본 `ALL`, `AC_SLOW`, `DC_COMBO`를 지원한다. 프로필, 두 자리 원천 종류 코드, 최소 출력은 각각 충족해야 한다. `minOutputKw`는 0–999999.99 kW 범위다. 제한·삭제된 충전소와 충전기는 검색에서 제외한다.
+
+충전소의 `asOf`는 선택된 충전기 중 가장 오래된 확인 시각이다. 확인 시각 자체가 없으면 `null`을 반환한다. 10분 이상 된 대수는 마지막 관측값으로 남기고 `STALE`로 표시한다. 확인된 지연이 없지만 관측 이력이 없는 충전기가 있으면 `UNKNOWN`을 표시한다. `availableOnly`는 10분 이내 가용 충전기가 한 대 이상 확인된 충전소를 선택한다.
