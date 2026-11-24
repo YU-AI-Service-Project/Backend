@@ -75,3 +75,22 @@ GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, INDEX, REFERENCES
 예시 요청은 `/api/charging-stations?latitude=35.834&longitude=128.751&profile=DC_COMBO&minOutputKw=50`이다. 프로필은 기본 `ALL`, `AC_SLOW`, `DC_COMBO`를 지원한다. 프로필, 두 자리 원천 종류 코드, 최소 출력은 각각 충족해야 한다. `minOutputKw`는 0–999999.99 kW 범위다. 제한·삭제된 충전소와 충전기는 검색에서 제외한다.
 
 충전소의 `asOf`는 선택된 충전기 중 가장 오래된 확인 시각이다. 확인 시각 자체가 없으면 `null`을 반환한다. 10분 이상 된 대수는 마지막 관측값으로 남기고 `STALE`로 표시한다. 확인된 지연이 없지만 관측 이력이 없는 충전기가 있으면 `UNKNOWN`을 표시한다. `availableOnly`는 10분 이내 가용 충전기가 한 대 이상 확인된 충전소를 선택한다.
+
+## 도착 시점 예측
+
+| 경로 | 요청 |
+| --- | --- |
+| `GET /api/charging-stations/{stationId}/prediction` | 쿼리 `profile`, `originLatitude`, `originLongitude` |
+| `POST /api/predictions/batch` | JSON 예시 `{"profile":"DC_COMBO","stationIds":["KECO:DEMO"],"origin":{"latitude":35.83,"longitude":128.75}}` |
+
+`mode`의 기본값은 `ARRIVAL_ETA`다. 배치는 고유 충전소 ID를 최대 30개 받고 입력 순서대로 결과를 돌려준다. `FIXED_30M`은 별도 모델이 필요하므로 현재 `503 MODEL_UNAVAILABLE`을 반환한다.
+
+| 환경변수 | 용도 |
+| --- | --- |
+| `WATTUP_KAKAO_REST_API_KEY` | 카카오모빌리티 자동차 길찾기 REST 키 |
+| `WATTUP_AI_ETA_BATCH_URL` | AI 팀과 합의한 전체 배치 URL. API 명세의 경로는 `/internal/ai/predictions/arrival/batch`다. |
+| `WATTUP_AI_ETA_BEARER_TOKEN` | 배치 서버에 Bearer 인증이 필요한 경우 사용하는 토큰 |
+
+Spring Boot는 수집이 완료된 MySQL 이력으로 30분 특징을 만들고, 카카오에서 도로 ETA를 조회한 후 FastAPI에 한 번에 전달한다. FastAPI의 `OK`는 항목 ID, 충전소, 프로필, 입력 시각과 계산된 예측 시각이 일치할 때만 사용한다. 응답의 `requestedArrivalAt`은 ETA 기준 도착 예정 시각이며 `forecastAt`은 5분 격자상의 모델 예측 시각이다. 예측할 수 없는 항목은 이유와 `probability: null`을 반환한다.
+
+상태 수집이 450초 넘게 지연되거나, 30분 관측을 확인할 수 없거나, 예측 범위를 벗어나면 모델을 호출하지 않는다. 카카오 호출은 서버 인스턴스당 동시 8개, 요청당 최대 30개이며 경로 조회 전체에 9초 제한을 둔다. FastAPI 호출은 시도당 2초이며 일시적 장애에서 한 번 재시도한다. 운영 키와 실제 FastAPI 배포의 통합 검증은 별도로 진행한다.

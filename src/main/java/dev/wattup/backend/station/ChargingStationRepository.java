@@ -134,10 +134,10 @@ class ChargingStationRepository {
         if (storedLabel != null || typeCode == null) {
             return storedLabel;
         }
-        if (ChargerFilter.Profile.AC_SLOW.typeCodes.contains(typeCode)) {
+        if (ChargerProfile.AC_SLOW.includes(typeCode)) {
             return "AC_SLOW";
         }
-        return ChargerFilter.Profile.DC_COMBO.typeCodes.contains(typeCode) ? "DC_COMBO" : null;
+        return ChargerProfile.DC_COMBO.includes(typeCode) ? "DC_COMBO" : null;
     }
 
     record Nearby(String stationId, String name, String address, BigDecimal latitude, BigDecimal longitude,

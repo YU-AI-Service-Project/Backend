@@ -66,7 +66,7 @@ class ChargingStationService {
         return stations.station(id).orElseThrow(StationApiError::notFound);
     }
 
-    private static StatusSummary summarize(ChargerFilter.Profile profile, List<Charger> chargers) {
+    private static StatusSummary summarize(ChargerProfile profile, List<Charger> chargers) {
         int available = 0;
         int charging = 0;
         int other = 0;
