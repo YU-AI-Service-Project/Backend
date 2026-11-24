@@ -1,0 +1,12 @@
+spring:
+  application:
+    name: wattup-backend
+  datasource:
+    url: "${WATTUP_DB_URL:jdbc:mysql://127.0.0.1:3307/wattup?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true}"
+    username: "${WATTUP_DB_USER:wattup}"
+    password: "${WATTUP_DB_PASSWORD}"
+    hikari:
+      connection-init-sql: "SET SESSION time_zone = '+00:00'"
+  flyway:
+    clean-disabled: true
+    validate-migration-naming: true

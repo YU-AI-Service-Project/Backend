@@ -1,0 +1,6 @@
+/target/
+/.local/
+/.idea/
+*.iml
+.env
+.env.*
