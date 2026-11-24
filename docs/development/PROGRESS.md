@@ -5,7 +5,8 @@
 - 기존 Docs 원본, API 명세 v3.0, DB 설계 및 ETA v4 ZIP과 멘토링 3회차 기록을 기준으로 사용한다. 화면 API 통합과 Android 정렬은 변경 제안으로 유지하고 기존 서버 Top-3 계약은 유지한다.
 - 초기 개발 환경·MySQL Flyway V1·CI는 PR [#1](https://github.com/YU-AI-Service-Project/Backend/pull/1)의 병합 커밋 `6ff8050`을 기준으로 재사용한다.
 - 완료 범주 A · 공단 HTTP 클라이언트, 메타데이터·상태 적재, 실행 이력, 중복 실행 방지, 재시도·일 한도와 스케줄링. PR [#3](https://github.com/YU-AI-Service-Project/Backend/pull/3)을 `550fd70`으로 Squash Merge했다.
-- 현재 범주 B · `feat/charging-station-read`. 비회원 주변 검색, 상세, 충전기 목록, 현재 상태를 구현했다. [GitHub PR 검색](https://github.com/YU-AI-Service-Project/Backend/pulls?q=is%3Apr+head%3Afeat%2Fcharging-station-read)
+- 완료 범주 B · 비회원 주변 검색, 상세, 충전기 목록, 현재 상태. PR [#4](https://github.com/YU-AI-Service-Project/Backend/pull/4)를 `7b3cb76`으로 Squash Merge했다.
+- 현재 범주 C · `feat/eta-ai-integration`. 비회원 단건·배치 도착 예측과 Spring Boot 연동을 구현했다. [GitHub PR 검색](https://github.com/YU-AI-Service-Project/Backend/pulls?q=is%3Apr+head%3Afeat%2Feta-ai-integration)
 - 범주 A는 수집 내부 서비스에 집중한다. 관리자 HTTP 49–51은 인증·운영 정책과 함께 H에서 제공한다. 공단 실연동은 인증키와 실호출 승인 후 검증한다.
 - FastAPI 추론 경로 47·48의 소유자는 AI 서버다. Spring Boot는 계약 및 호출 클라이언트를 담당한다. 52번 AI 연결 상태는 Spring Boot 소유다.
 - 각 범주의 CI와 병합 상태는 해당 PR을 기준으로 기록한다.
@@ -24,7 +25,16 @@
 - 목록 요청은 반경과 충전기 조건에 맞는 전체 충전소 수와 거리순 결과를 반환한다. 상세는 충전기와 집계 상태를 함께 반환한다.
 - 10분 이상 된 관측에는 지연을 표시하고, 관측 시각이 없는 충전기는 상태 미확인으로 집계한다. `availableOnly`는 10분 이내 가용 관측이 있는 충전소만 선택한다.
 - Java 25·MySQL 8.4에서 `mvnw.cmd clean verify`로 전체 테스트 21개가 통과했다. HTTP 테스트는 4개 경로, 필터, 오류 응답, 최신성, 비공개 충전기 제외를 검증한다. Android 실기기 테스트는 미실행이다.
-- 다음 범주는 C의 경로 ETA, 특징 생성, FastAPI 배치 계약이다. 운영 ETA와 AI 주소·인증 정책은 해당 범주에서 확인한다.
+- [PR CI](https://github.com/YU-AI-Service-Project/Backend/actions/runs/45348326127)에서 전체 테스트 21개 통과를 확인했다.
+
+## 범주 C 검증과 인계
+
+- 카카오 자동차 길찾기에서 도로 거리·ETA·요청 및 응답 수신 시각을 수집한다. MySQL의 완전한 지역별 수집에서만 5분 간격 관측 7개와 품질 지표를 재현한다.
+- `asOf` 뒤에 지역의 전체 인벤토리가 갱신됐으면 다음 격자까지 예측을 유보한다. 첫 관측 전의 과거 샘플에는 해당 충전기를 집계하지 않는다. 현재 격자에서 호환 충전기가 미관측 상태이면 확률을 반환하지 않는다.
+- ZIP의 `API_ETA_연동규격.md`와 `ai-eta-v4.openapi.json`은 `/internal/v2/arrival-predictions/batch`를 초안으로 제시한다. API 48번의 자체 경로는 유지하며, 배포 URL과 인증은 AI 팀과 합의한 값으로 설정한다. ZIP에는 실행 가능한 추론 함수와 모델 파일이 있다. 운영 FastAPI HTTP 서버는 아직 검증 대상이다.
+- 동일한 합성 충전기 이력으로 ZIP의 `observation_builder.py`와 Java 계산의 입력 필드 29개를 대조했다. `predict_eta.py` 오프라인 재생에서 15분 격자, 확률 `0.975582926408748`, 지연 및 이력 부족 시 확률 `null`을 확인했다. 이는 재현용 결과다.
+- 로컬 Java 25·MySQL 8.4에서 `mvnw.cmd clean verify` 전체 34개 통과. 단건과 최대 30건, 일부 장애, 잘못 매칭된 예측 시각을 검증했다. 운영 데이터 규모, 카카오 실호출 및 실제 FastAPI 배포 연동은 미검증이다. 모델 카드는 `production_ready=false`다.
+- 다음 범주는 D의 Top-3 추천이다. 순위 가중치와 폴백 정책은 팀의 확정 상태를 확인한다.
 
 ## API 52개 추적표
 
@@ -36,8 +46,8 @@
 | 2 | `GET /api/charging-stations/{stationId}` | 충전소 상세 | 핵심 | B | 구현됨 | [Controller](../../src/main/java/dev/wattup/backend/station/ChargingStationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/station/ChargingStationApiTests.java) |
 | 3 | `GET /api/charging-stations/{stationId}/chargers` | 충전기별 구성·상태 목록 | 핵심 | B | 구현됨 | [Controller](../../src/main/java/dev/wattup/backend/station/ChargingStationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/station/ChargingStationApiTests.java) |
 | 4 | `GET /api/charging-stations/{stationId}/status` | 최신 상태·가용 대수·갱신 시각 | 핵심 | B | 구현됨 | [Controller](../../src/main/java/dev/wattup/backend/station/ChargingStationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/station/ChargingStationApiTests.java) |
-| 5 | `GET /api/charging-stations/{stationId}/prediction` | 충전소 단건 예측 | 핵심 | C | 미구현 | — |
-| 6 | `POST /api/predictions/batch` | 지도/목록용 다중 충전소 예측 | 핵심 | C | 미구현 | — |
+| 5 | `GET /api/charging-stations/{stationId}/prediction` | 충전소 단건 예측 | 핵심 | C | ETA 구현 · 실연동 대기 | [Controller](../../src/main/java/dev/wattup/backend/prediction/PredictionController.java) · [HTTP 테스트](../../src/test/java/dev/wattup/backend/prediction/PredictionApiTests.java) |
+| 6 | `POST /api/predictions/batch` | 지도/목록용 다중 충전소 예측 | 핵심 | C | ETA 구현 · 실연동 대기 | [Controller](../../src/main/java/dev/wattup/backend/prediction/PredictionController.java) · [HTTP 테스트](../../src/test/java/dev/wattup/backend/prediction/PredictionApiTests.java) |
 | 7 | `GET /api/recommendations` | 최대 3곳 추천·추천 근거 | 핵심 | D | 미구현 | — |
 | 8 | `GET /api/locations/search` | 카카오 장소·주소 검색 프록시 | 추가 협의 | G | 미구현 | — |
 | 9 | `GET /api/locations/reverse-geocode` | 선택 좌표의 주소 표현 | 추가 협의 | G | 미구현 | — |
@@ -79,7 +89,7 @@
 | 45 | `GET /api/app/notices` | 점검·장애 안내 | 추가 협의 | H | 미구현 | — |
 | 46 | `POST /api/support/reports` | 이용 오류·정보 오류 신고 | 추가 협의 | H | 미구현 | — |
 | 47 | `POST /internal/ai/predictions/fixed30/batch` | Spring Boot → AI 고정 30분 예측(HTTP 어댑터 제안) | 내부 | H | FastAPI 담당 | AI 팀 HTTP 계약 대기 |
-| 48 | `POST /internal/ai/predictions/arrival/batch` | Spring Boot → AI ETA v4 배치 예측(기존 협업 규격) | 내부/확장 | C | FastAPI 담당 | AI 팀 HTTP 계약 대기 |
+| 48 | `POST /internal/ai/predictions/arrival/batch` | Spring Boot → AI ETA v4 배치 예측(기존 협업 규격) | 내부/확장 | C | Spring Boot 클라이언트 구현 · FastAPI 실연동 대기 | [클라이언트](../../src/main/java/dev/wattup/backend/prediction/EtaBatchClient.java) · [계약 테스트](../../src/test/java/dev/wattup/backend/prediction/EtaBatchClientTests.java) |
 | 49 | `GET /internal/collector/health` | 상태 수집기 최근 성공·실패 현황 | 내부 | H | 미구현 | — |
 | 50 | `GET /internal/collector/runs` | 수집 실행 이력 | 내부 | H | 미구현 | — |
 | 51 | `POST /internal/collector/runs` | 관리자 수동 동기화 요청(선택) | 내부 | H | 미구현 | — |
