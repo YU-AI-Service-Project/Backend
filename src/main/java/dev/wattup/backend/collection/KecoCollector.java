@@ -51,7 +51,7 @@ final class KecoCollector {
         try {
             fetchPages(runId, endpoint, batch);
             transaction.executeWithoutResult(status -> {
-                int observations = inventory.publish(runId, endpoint, batch.readings);
+                int observations = inventory.publish(runId, endpoint, settings.region(), batch.readings);
                 finish(runId, batch, observations, null);
             });
         } catch (KecoException e) {

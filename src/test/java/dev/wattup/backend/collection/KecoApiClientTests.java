@@ -13,6 +13,8 @@ import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -87,6 +89,44 @@ class KecoApiClientTests {
                     assertThat(failure.retryable()).isFalse();
                     assertThat(failure).hasMessageNotContaining("secret-value");
                 });
+    }
+
+    @Test
+    void rejectsAMalformedProviderTimestamp() {
+        reply("getChargerStatus", 200, """
+                {"resultCode":"00","pageNo":1,"numOfRows":10,"totalCount":1,"items":[
+                {"statId":"ME001234","chgerId":"01","stat":"2","statUpdDt":"20261124999999"}]}
+                """);
+
+        assertThatThrownBy(() -> client.fetch(KecoEndpoint.CHANGED_STATUS, "fixture", "27", 1, 10))
+                .isInstanceOf(KecoException.class).hasMessage("UPSTREAM_PAGE_INVALID");
+    }
+
+    @Test
+    void timesOutWhenHeadersArriveButTheResponseBodyStalls() {
+        var headersSent = new CountDownLatch(1);
+        var releaseBody = new CountDownLatch(1);
+        upstream.createContext("/EvCharger/getChargerInfo", exchange -> {
+            try (exchange) {
+                exchange.sendResponseHeaders(200, 0);
+                exchange.getResponseBody().write('{');
+                exchange.getResponseBody().flush();
+                headersSent.countDown();
+                releaseBody.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        client = new KecoApiClient(HttpClient.newHttpClient(), new JsonMapper(),
+                URI.create("http://127.0.0.1:" + upstream.getAddress().getPort() + "/EvCharger/"),
+                Duration.ofMillis(750));
+        try {
+            assertThatThrownBy(() -> client.fetch(KecoEndpoint.FULL_INVENTORY, "fixture", "27", 1, 10))
+                    .isInstanceOf(KecoException.class).hasMessage("UPSTREAM_TIMEOUT");
+            assertThat(headersSent.getCount()).isZero();
+        } finally {
+            releaseBody.countDown();
+        }
     }
 
     private void reply(String path, int status, String body) {

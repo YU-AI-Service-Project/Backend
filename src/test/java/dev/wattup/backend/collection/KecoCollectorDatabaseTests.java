@@ -178,11 +178,70 @@ class KecoCollectorDatabaseTests {
         }
     }
 
+    @Test
+    void retiresMissingInventoryOnlyInTheRegionOfACompleteSnapshot() throws IOException {
+        String removed = "TEST" + UUID.randomUUID().toString().substring(0, 8);
+        String retained = "TEST" + UUID.randomUUID().toString().substring(0, 8);
+        var regionalCalls = new AtomicInteger();
+        HttpServer upstream = upstream(request -> {
+            if (request.getRequestURI().getQuery().contains("zcode=11")) {
+                return page(1, 1, row(retained, "2", "20261124120000", ""));
+            }
+            return regionalCalls.incrementAndGet() == 1
+                    ? page(1, 1, row(removed, "2", "20261124120000", ""))
+                    : page(1, 0, "");
+        });
+        try {
+            var daegu = collector(upstream);
+            var seoul = collector(upstream, 1000, "11");
+            assertThat(status(daegu.collect(KecoEndpoint.FULL_INVENTORY).orElseThrow())).isEqualTo("SUCCEEDED");
+            assertThat(status(seoul.collect(KecoEndpoint.FULL_INVENTORY).orElseThrow())).isEqualTo("SUCCEEDED");
+            assertThat(status(daegu.collect(KecoEndpoint.FULL_INVENTORY).orElseThrow())).isEqualTo("SUCCEEDED");
+        } finally {
+            upstream.stop(0);
+        }
+        assertThat(isDeleted(removed)).isTrue();
+        assertThat(isDeleted(retained)).isFalse();
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM charger_status_observations o JOIN chargers c ON c.charger_id = o.charger_id
+                WHERE c.station_id = ?
+                """, Long.class, "KECO:" + removed)).isEqualTo(1L);
+    }
+
+    @Test
+    void rollsBackInventoryIfTheRunWasSupersededBeforePublishing() throws IOException {
+        String station = "TEST" + UUID.randomUUID().toString().substring(0, 8);
+        HttpServer upstream = upstream(request -> {
+            jdbc.update("""
+                    UPDATE collection_runs SET status = 'FAILED', error_code = 'RUN_INTERRUPTED'
+                    WHERE status = 'RUNNING'
+                    """);
+            return page(1, 1, row(station, "2", "20261124120000", ""));
+        });
+        try {
+            long run = collector(upstream).collect(KecoEndpoint.FULL_INVENTORY).orElseThrow();
+            assertThat(status(run)).isEqualTo("FAILED");
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM charging_stations WHERE station_id = ?",
+                    Long.class, "KECO:" + station)).isZero();
+        } finally {
+            upstream.stop(0);
+        }
+    }
+
+    private boolean isDeleted(String station) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT source_deleted FROM charging_stations WHERE station_id = ?", Boolean.class, "KECO:" + station));
+    }
+
     private KecoCollector collector(HttpServer upstream) {
         return collector(upstream, 1000);
     }
 
     private KecoCollector collector(HttpServer upstream, int dailyLimit) {
+        return collector(upstream, dailyLimit, "27");
+    }
+
+    private KecoCollector collector(HttpServer upstream, int dailyLimit, String region) {
         var client = new KecoApiClient(HttpClient.newHttpClient(), new JsonMapper(),
                 URI.create("http://127.0.0.1:" + upstream.getAddress().getPort() + "/"), Duration.ofSeconds(8));
         LocalDate fixtureDay = jdbc.queryForObject("""
@@ -190,7 +249,7 @@ class KecoCollectorDatabaseTests {
                 FROM keco_daily_requests
                 """, LocalDate.class);
         return new KecoCollector(client, new CollectionRunRepository(jdbc), new ChargerCollectionRepository(jdbc),
-                transactions, new KecoCollectionSettings("fixture", "27", 10, dailyLimit),
+                transactions, new KecoCollectionSettings("fixture", region, 10, dailyLimit),
                 Clock.fixed(fixtureDay.atTime(4, 0).toInstant(ZoneOffset.UTC), ZoneOffset.UTC));
     }
 

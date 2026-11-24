@@ -23,9 +23,9 @@ final class ChargerCollectionRepository {
         this.jdbc = jdbc;
     }
 
-    int publish(long runId, KecoEndpoint endpoint, List<ObservedReading> batch) {
+    int publish(long runId, KecoEndpoint endpoint, String region, List<ObservedReading> batch) {
         if (endpoint == KecoEndpoint.FULL_INVENTORY) {
-            saveInventory(batch);
+            saveInventory(runId, region, batch);
         }
         for (ObservedReading reading : batch) {
             saveObservation(runId, reading);
@@ -33,18 +33,19 @@ final class ChargerCollectionRepository {
         return batch.size();
     }
 
-    private void saveInventory(List<ObservedReading> batch) {
+    private void saveInventory(long runId, String region, List<ObservedReading> batch) {
         var stations = batch.stream().collect(Collectors.groupingBy(
                 observation -> observation.reading().internalStationId(), LinkedHashMap::new, Collectors.toList()));
         stations.values().forEach(this::upsertStation);
         jdbc.batchUpdate("""
                 INSERT INTO chargers (station_id, source_charger_id, charger_type_code, output_kw, charging_method,
-                    source_deleted, source_limited, last_metadata_seen_at, source_payload)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) AS incoming
+                    source_deleted, source_limited, last_metadata_seen_at, source_payload, inventory_region, inventory_run_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) AS incoming
                 ON DUPLICATE KEY UPDATE charger_type_code = incoming.charger_type_code, output_kw = incoming.output_kw,
                     charging_method = incoming.charging_method, source_deleted = incoming.source_deleted,
                     source_limited = incoming.source_limited, last_metadata_seen_at = incoming.last_metadata_seen_at,
-                    source_payload = incoming.source_payload
+                    source_payload = incoming.source_payload, inventory_region = incoming.inventory_region,
+                    inventory_run_id = incoming.inventory_run_id
                 """, batch, 500, (statement, observation) -> {
             KecoReading reading = observation.reading();
             JsonNode row = reading.attributes();
@@ -57,7 +58,21 @@ final class ChargerCollectionRepository {
             statement.setBoolean(7, isYes(row, "limitYn"));
             statement.setObject(8, observation.observedAt());
             statement.setString(9, row.toString());
+            statement.setString(10, region);
+            statement.setLong(11, runId);
         });
+        jdbc.update("""
+                UPDATE chargers SET source_deleted = TRUE
+                WHERE inventory_region = ? AND inventory_run_id < ? AND source_deleted = FALSE
+                """, region, runId);
+        jdbc.update("""
+                UPDATE charging_stations s SET source_deleted = TRUE
+                WHERE s.source_deleted = FALSE AND EXISTS (
+                  SELECT 1 FROM chargers c WHERE c.station_id = s.station_id AND c.inventory_region = ?
+                ) AND NOT EXISTS (
+                  SELECT 1 FROM chargers c WHERE c.station_id = s.station_id AND c.source_deleted = FALSE
+                )
+                """, region);
     }
 
     private void upsertStation(List<ObservedReading> chargers) {
