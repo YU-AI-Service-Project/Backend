@@ -22,7 +22,7 @@ class WattUpDatabaseTests {
 
         try (var application = new SpringApplicationBuilder(WattUpApplication.class)
                 .web(WebApplicationType.NONE)
-                .run("--spring.datasource.url=" + testDatabaseUrl)) {
+                .run("--spring.datasource.url=" + testDatabaseUrl, "--wattup.collection.enabled=false")) {
             var jdbc = application.getBean(JdbcTemplate.class);
             List<String> tables = jdbc.queryForList("""
                     SELECT table_name

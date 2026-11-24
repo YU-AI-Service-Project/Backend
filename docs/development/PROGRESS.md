@@ -4,10 +4,18 @@
 
 - 기존 Docs 원본, API 명세 v3.0, DB 설계 및 ETA v4 ZIP과 멘토링 3회차 기록을 기준으로 사용한다. 화면 API 통합과 Android 정렬은 변경 제안으로 유지하고 기존 서버 Top-3 계약은 유지한다.
 - 초기 개발 환경·MySQL Flyway V1·CI는 PR [#1](https://github.com/YU-AI-Service-Project/Backend/pull/1)의 병합 커밋 `6ff8050`을 기준으로 재사용한다.
-- 현재 범주 A · `feat/data-collection`. 공단 메타데이터·변경 상태용 HTTP 클라이언트, 완전한 수집 실행 판단, 상태 이력 적재, 스케줄링을 순서대로 진행한다.
+- 현재 범주 A · `feat/data-collection`. 공단 HTTP 클라이언트, 메타데이터·상태 적재, 실행 이력, 중복 실행 방지, 재시도·일 한도와 스케줄링을 구현했다. [GitHub PR 검색](https://github.com/YU-AI-Service-Project/Backend/pulls?q=is%3Apr+head%3Afeat%2Fdata-collection)
 - 범주 A는 수집 내부 서비스에 집중한다. 관리자 HTTP 49–51은 인증·운영 정책과 함께 H에서 제공한다. 공단 실연동은 인증키와 실호출 승인 후 검증한다.
 - FastAPI 추론 경로 47·48의 소유자는 AI 서버다. Spring Boot는 계약 및 호출 클라이언트를 담당한다. 52번 AI 연결 상태는 Spring Boot 소유다.
 - 범주 A의 병합이 승인 대기일 경우 그 상태를 기록한다. 같은 기능의 PR을 중복 생성하지 않는다.
+
+## 범주 A 검증과 인계
+
+- `a4e8421` HTTP 계약·API 추적표, `bd45337` 상태 이력과 적재, 후속 커밋 지역 인벤토리 정합성과 스케줄링.
+- Flyway V2는 일 한도와 지연 관측 구분, V3는 지역별 인벤토리 수집 실행을 추가한다. V1은 기존 파일을 사용한다.
+- Java 25·MySQL 8.4에서 `mvnw.cmd clean verify` 성공. 로컬 15개 통과, 실패·건너뜀 0개. 공단 인증키와 실호출 승인 확인 전까지 실제 API 및 대량 적재 처리 시간은 미검증 상태다.
+- 실행 중 수집기 영구 중단이 있으면 다음 정상 실행이 미완료 실행을 종료한다. 상태 집계와 향후 AI 특징 생성은 완전한 수집 실행과 최신 상태에 반영된 관측을 기준으로 한다.
+- 병합과 CI 결과는 GitHub PR을 기준으로 확인한다. 범주 B는 최신 `main`에서 비회원 주변 검색, 상세, 충전기 목록, 현재 상태 순으로 구현한다.
 
 ## API 52개 추적표
 

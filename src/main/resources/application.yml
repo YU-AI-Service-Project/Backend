@@ -10,3 +10,11 @@ spring:
   flyway:
     clean-disabled: true
     validate-migration-naming: true
+
+wattup:
+  collection:
+    enabled: "${WATTUP_KECO_ENABLED:false}"
+    service-key: "${WATTUP_KECO_SERVICE_KEY:}"
+    region: "${WATTUP_KECO_REGION:}"
+    page-size: "${WATTUP_KECO_PAGE_SIZE:9999}"
+    daily-limit: "${WATTUP_KECO_DAILY_LIMIT:1000}"
