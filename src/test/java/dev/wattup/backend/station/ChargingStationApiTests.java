@@ -156,6 +156,39 @@ class ChargingStationApiTests {
         assertError("/" + hidden, 404, "STATION_NOT_FOUND");
     }
 
+    @Test
+    void recommendsCurrentStationsWhenThePredictionCohortDiffersOrHistoryIsMissing() throws Exception {
+        var result = getPath("/api/recommendations?latitude=34.485678&longitude=128.345678&radiusM=500"
+                + "&profile=ALL&minOutputKw=70");
+        assertThat(result.status()).isEqualTo(200);
+        assertThat(result.body().path("totalCandidates").asInt()).isEqualTo(2);
+        assertThat(result.body().path("rankingBasis").asString()).isEqualTo("DISTANCE_CURRENT_STATUS_OUTPUT");
+        var items = result.body().path("items");
+        assertThat(items.size()).isEqualTo(2);
+        var first = items.path(0);
+        assertThat(first.path("stationId").asString()).isEqualTo(near);
+        assertThat(first.path("rank").asInt()).isEqualTo(1);
+        assertThat(first.path("outputKw").asDouble()).isEqualTo(100);
+        assertThat(first.path("current").path("freshAvailableCount").asInt()).isEqualTo(1);
+        assertThat(first.path("prediction").path("status").asString()).isEqualTo("OUTPUT_FILTER_NOT_SUPPORTED");
+        assertThat(first.path("prediction").path("probability").isNull()).isTrue();
+        assertThat(first.path("roadDistanceM").isNull()).isTrue();
+        assertThat(items.path(1).path("stationId").asString()).isEqualTo(far);
+        assertThat(items.path(1).path("current").path("freshAvailableCount").asInt()).isZero();
+        assertThat(items.path(1).path("prediction").path("status").asString()).isEqualTo("INPUT_INCOMPLETE");
+    }
+
+    @Test
+    void recommendsOnlyExistingCandidatesAndValidatesQuery() throws Exception {
+        assertThat(getPath("/api/recommendations?latitude=0&longitude=0&profile=ALL").body()
+                .path("items").size()).isZero();
+        var one = getPath("/api/recommendations?latitude=34.485678&longitude=128.345678&radiusM=100&profile=DC_COMBO");
+        assertThat(one.body().path("items").size()).isEqualTo(1);
+        var invalid = getPath("/api/recommendations?latitude=35&longitude=128&profile=ALL&limit=4");
+        assertThat(invalid.status()).isEqualTo(400);
+        assertThat(invalid.body().path("error").path("code").asString()).isEqualTo("INVALID_REQUEST");
+    }
+
     private void assertError(String suffix, int status, String code) throws Exception {
         var response = get(suffix);
         assertThat(response.status()).isEqualTo(status);
@@ -164,7 +197,11 @@ class ChargingStationApiTests {
     }
 
     private Response get(String suffix) throws Exception {
-        var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/charging-stations" + suffix)).build();
+        return getPath("/api/charging-stations" + suffix);
+    }
+
+    private Response getPath(String path) throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).build();
         var result = http.send(request, HttpResponse.BodyHandlers.ofString());
         return new Response(result.statusCode(), json.readTree(result.body()));
     }

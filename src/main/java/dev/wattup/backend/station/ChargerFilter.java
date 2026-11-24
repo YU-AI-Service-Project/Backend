@@ -24,6 +24,16 @@ record ChargerFilter(ChargerProfile profile, List<String> typeCodes, BigDecimal 
                 validateOutput(minOutputKw));
     }
 
+    static ChargerFilter forRecommendation(String profile, BigDecimal minOutputKw) {
+        ChargerProfile selected;
+        try {
+            selected = ChargerProfile.valueOf(profile);
+        } catch (IllegalArgumentException e) {
+            throw StationApiError.unsupported("UNSUPPORTED_PROFILE", "profile");
+        }
+        return new ChargerFilter(selected, List.of(), validateOutput(minOutputKw));
+    }
+
     private static ChargerProfile parseProfile(String profile, boolean search) {
         try {
             return ChargerProfile.valueOf(profile);
