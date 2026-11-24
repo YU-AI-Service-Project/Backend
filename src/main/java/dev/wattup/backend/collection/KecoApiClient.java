@@ -4,7 +4,6 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -20,6 +19,9 @@ import java.time.format.DateTimeParseException;
 import java.time.format.ResolverStyle;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 
 final class KecoApiClient {
@@ -66,12 +68,17 @@ final class KecoApiClient {
     }
 
     private HttpResponse<String> send(HttpRequest request) {
+        var pending = http.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         try {
-            return http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            return pending.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
+            pending.cancel(true);
             Thread.currentThread().interrupt();
             throw new KecoException("COLLECTION_INTERRUPTED", false);
-        } catch (IOException e) {
+        } catch (TimeoutException e) {
+            pending.cancel(true);
+            throw new KecoException("UPSTREAM_TIMEOUT", true);
+        } catch (ExecutionException e) {
             throw new KecoException("UPSTREAM_CONNECTION", true);
         }
     }
@@ -126,7 +133,8 @@ final class KecoApiClient {
         String chargerId = item.path("chgerId").asText("");
         String rawStatus = item.path("stat").asText("").strip();
         if (!stationId.matches("[A-Za-z0-9_-]{1,80}") || !chargerId.matches("[A-Za-z0-9_-]{1,40}")
-                || !item.path("statId").isString() || !item.path("chgerId").isString() || rawStatus.length() > 20) {
+                || !item.path("statId").isString() || !item.path("chgerId").isString()
+                || !rawStatus.matches("[0-9]")) {
             throw invalidPage();
         }
         return new KecoReading(stationId, chargerId, rawStatus,
@@ -134,11 +142,17 @@ final class KecoApiClient {
     }
 
     private static LocalDateTime utcTimestamp(String value) {
-        try {
-            return LocalDateTime.parse(value, SOURCE_TIMESTAMP).atZone(PROVIDER_ZONE)
-                    .withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
-        } catch (DateTimeParseException e) {
+        if (value.isBlank() || value.equals("00000000000000") || value.equals("0")) {
             return null;
+        }
+        try {
+            LocalDateTime localTime = LocalDateTime.parse(value, SOURCE_TIMESTAMP);
+            if (localTime.getYear() < 1001) {
+                throw invalidPage();
+            }
+            return localTime.atZone(PROVIDER_ZONE).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
+        } catch (DateTimeParseException e) {
+            throw invalidPage();
         }
     }
 

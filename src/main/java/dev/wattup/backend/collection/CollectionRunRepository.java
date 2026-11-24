@@ -100,12 +100,15 @@ final class CollectionRunRepository {
                 int observations, LocalDateTime completedAt, String errorCode) {
         boolean complete = errorCode == null;
         String status = complete ? "SUCCEEDED" : pages > 0 ? "PARTIAL" : "FAILED";
-        jdbc.update("""
+        int updated = jdbc.update("""
                 UPDATE collection_runs SET status = ?, is_complete = ?, completed_at = ?, expected_pages = ?,
                   provider_total_count = ?, received_pages = ?, received_records = ?, saved_observations = ?,
                   error_code = ?
                 WHERE run_id = ? AND status = 'RUNNING'
                 """, status, complete, completedAt, expectedPages, providerTotal, pages, records,
                 observations, errorCode, runId);
+        if (complete && updated != 1) {
+            throw new KecoException("COLLECTION_RUN_SUPERSEDED", false);
+        }
     }
 }
