@@ -3,7 +3,9 @@ package dev.wattup.backend.prediction;
 import dev.wattup.backend.station.ChargerProfile;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -31,6 +33,7 @@ class EtaHistoryRepository {
         this.jdbc = jdbc;
     }
 
+    @Transactional(readOnly = true, timeout = 4)
     Map<String, Candidate> load(List<String> stationIds, ChargerProfile profile, Instant asOf) {
         var params = new MapSqlParameterSource("stations", stationIds)
                 .addValue("asOf", LocalDateTime.ofInstant(asOf, ZoneOffset.UTC))
@@ -43,11 +46,25 @@ class EtaHistoryRepository {
                   SELECT sample_index + 1, sample_time + INTERVAL 5 MINUTE FROM sample_grid WHERE sample_index < 6
                 ), inventory AS (
                   SELECT s.station_id, s.latitude, s.longitude, c.charger_id, c.inventory_region,
-                    c.charger_type_code, c.output_kw
+                    c.charger_type_code, c.output_kw, c.inventory_run_id
                 """ + INVENTORY + """
                 )
                 SELECT c.*, g.sample_index, o.raw_status_code, o.charge_started_at,
-                  EXISTS (
+                  CASE WHEN g.sample_index = 6 THEN (
+                    SELECT MAX(delta.completed_at) FROM collection_runs delta
+                    WHERE delta.region_code = c.inventory_region AND delta.run_type = 'STATUS_DELTA'
+                      AND delta.is_complete = TRUE AND delta.status = 'SUCCEEDED' AND delta.completed_at <= :asOf
+                  ) END AS status_poll_at,
+                  NOT EXISTS (
+                    SELECT 1 FROM collection_runs newer_metadata
+                    WHERE newer_metadata.run_type = 'STATUS_FULL' AND newer_metadata.region_code = c.inventory_region
+                      AND newer_metadata.completed_at > :asOf AND newer_metadata.is_complete = TRUE
+                      AND newer_metadata.status = 'SUCCEEDED'
+                  ) AND (c.inventory_run_id IS NULL OR EXISTS (
+                    SELECT 1 FROM collection_runs metadata
+                    WHERE metadata.run_id = c.inventory_run_id AND metadata.completed_at <= :asOf
+                      AND metadata.is_complete = TRUE AND metadata.status = 'SUCCEEDED'
+                  )) AND EXISTS (
                     SELECT 1 FROM collection_runs delta
                     WHERE delta.region_code = c.inventory_region AND delta.run_type = 'STATUS_DELTA'
                       AND delta.is_complete = TRUE AND delta.status = 'SUCCEEDED'
@@ -60,7 +77,7 @@ class EtaHistoryRepository {
                       AND NOT EXISTS (
                         SELECT 1 FROM collection_runs bad
                         WHERE bad.region_code = c.inventory_region AND bad.started_at <= g.sample_time
-                          AND bad.completed_at BETWEEN full_run.completed_at AND :asOf
+                          AND bad.completed_at >= full_run.completed_at
                           AND bad.run_type IN ('STATUS_FULL', 'STATUS_DELTA') AND bad.is_complete = FALSE
                       )
                   ) AS reliable
@@ -73,10 +90,10 @@ class EtaHistoryRepository {
                     AND r.status = 'SUCCEEDED' AND r.is_complete = TRUE
                     AND r.region_code = c.inventory_region
                     AND h.observed_at <= g.sample_time AND r.completed_at <= g.sample_time
-                  ORDER BY r.completed_at DESC, h.observation_id DESC
+                  ORDER BY h.observed_at DESC, h.observation_id DESC
                   LIMIT 1
                 )
-                """, params, (org.springframework.jdbc.core.RowCallbackHandler) row -> addSample(row, profile, accumulators));
+                """, params, (RowCallbackHandler) row -> addSample(row, profile, accumulators));
         if (accumulators.values().stream().anyMatch(history -> history.reliableSamples() == EtaFeatures.SAMPLE_COUNT)) {
             jdbc.query("""
                     WITH inventory AS (
@@ -90,10 +107,9 @@ class EtaHistoryRepository {
                     JOIN collection_runs r ON r.run_id = o.collection_run_id
                     WHERE r.status = 'SUCCEEDED' AND r.is_complete = TRUE
                       AND r.region_code = c.inventory_region AND o.used_for_current = TRUE
-                      AND o.observed_at <= :asOf AND r.completed_at <= :asOf
-                      AND (r.completed_at > :windowStart OR o.observed_at > :windowStart)
+                      AND o.observed_at <= :asOf AND r.completed_at > :windowStart AND r.completed_at <= :asOf
                     GROUP BY c.station_id, c.charger_type_code
-                    """, params, (org.springframework.jdbc.core.RowCallbackHandler) row -> {
+                    """, params, (RowCallbackHandler) row -> {
                 if (profile.includes(row.getString("charger_type_code"))) {
                     accumulators.get(row.getString("station_id")).changes += row.getInt("changes");
                 }
@@ -101,7 +117,8 @@ class EtaHistoryRepository {
         }
         var candidates = new HashMap<String, Candidate>();
         accumulators.forEach((station, history) -> candidates.put(station,
-                new Candidate(history.latitude, history.longitude, EtaFeatures.build(asOf, profile, history.samples,
+                new Candidate(history.latitude, history.longitude, history.statusPollAt,
+                        EtaFeatures.build(asOf, profile, history.samples,
                         history.reliableSamples(), history.changes).orElseGet(Map::of))));
         return candidates;
     }
@@ -119,15 +136,26 @@ class EtaHistoryRepository {
             return;
         }
         int sampleIndex = row.getInt("sample_index");
+        String status = row.getString("raw_status_code");
+        if (status == null && sampleIndex < EtaFeatures.SAMPLE_COUNT - 1) {
+            return;
+        }
         LocalDateTime chargeStartedAt = row.getObject("charge_started_at", LocalDateTime.class);
-        history.samples.get(sampleIndex).add(new EtaFeatures.Reading(row.getString("raw_status_code"), code,
+        history.samples.get(sampleIndex).add(new EtaFeatures.Reading(status, code,
                 row.getDouble("output_kw"), chargeStartedAt == null ? null : chargeStartedAt.toInstant(ZoneOffset.UTC)));
         if (!row.getBoolean("reliable")) {
             history.unreliable[sampleIndex] = true;
         }
+        LocalDateTime lastPoll = row.getObject("status_poll_at", LocalDateTime.class);
+        if (lastPoll != null) {
+            Instant pollAt = lastPoll.toInstant(ZoneOffset.UTC);
+            if (history.statusPollAt == null || pollAt.isBefore(history.statusPollAt)) {
+                history.statusPollAt = pollAt;
+            }
+        }
     }
 
-    record Candidate(Double latitude, Double longitude, Map<String, Number> features) {
+    record Candidate(Double latitude, Double longitude, Instant statusPollAt, Map<String, Number> features) {
     }
 
     private static final class History {
@@ -136,6 +164,7 @@ class EtaHistoryRepository {
         final List<List<EtaFeatures.Reading>> samples = IntStream.range(0, EtaFeatures.SAMPLE_COUNT)
                 .<List<EtaFeatures.Reading>>mapToObj(i -> new ArrayList<>()).toList();
         final boolean[] unreliable = new boolean[EtaFeatures.SAMPLE_COUNT];
+        Instant statusPollAt;
         int changes;
 
         History(Double latitude, Double longitude) {

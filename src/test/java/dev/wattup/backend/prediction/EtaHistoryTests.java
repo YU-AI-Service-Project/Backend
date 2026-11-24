@@ -52,8 +52,23 @@ class EtaHistoryTests {
                 run(jdbc, "STATUS_DELTA", "ZZ", GRID_END.minusMinutes(1), 0, false);
                 var result = history.load(List.of(station), ChargerProfile.AC_SLOW, AS_OF).get(station);
                 assertThat(result.latitude()).isEqualTo(35.1);
+                assertThat(result.statusPollAt()).isEqualTo(AS_OF);
                 assertThat(result.features()).containsEntry("availableCount", 1).containsEntry("availableLag30", 1)
                         .containsEntry("coverageLast30m", 1.0);
+
+                jdbc.update("INSERT INTO chargers (station_id,source_charger_id,charger_type_code,output_kw,inventory_region)"
+                        + " VALUES (?,'02','02',7,'XY')", station);
+                long newCharger = jdbc.queryForObject("SELECT charger_id FROM chargers WHERE station_id=?"
+                        + " AND source_charger_id='02'", Long.class, station);
+                assertThat(history.load(List.of(station), ChargerProfile.AC_SLOW, AS_OF).get(station).features()).isEmpty();
+                long latest = run(jdbc, "STATUS_DELTA", "XY", GRID_END, 0, true);
+                observe(jdbc, newCharger, latest, "2", "AVAILABLE", GRID_END);
+                assertThat(history.load(List.of(station), ChargerProfile.AC_SLOW, AS_OF).get(station).features())
+                        .containsEntry("availableCount", 2).containsEntry("availableLag30", 1);
+
+                long newerFull = run(jdbc, "STATUS_FULL", "XY", GRID_END.plusMinutes(1), 0, true);
+                assertThat(history.load(List.of(station), ChargerProfile.AC_SLOW, AS_OF).get(station).features()).isEmpty();
+                jdbc.update("DELETE FROM collection_runs WHERE run_id = ?", newerFull);
 
                 run(jdbc, "STATUS_DELTA", "XY", GRID_END.minusMinutes(2), 0, false);
                 result = history.load(List.of(station), ChargerProfile.AC_SLOW, AS_OF).get(station);

@@ -50,7 +50,11 @@ final class KakaoRouteClient {
             if (response.statusCode() != 200) {
                 return Optional.empty();
             }
-            JsonNode route = json.readTree(response.body()).path("routes").path(0);
+            JsonNode body = json.readTree(response.body());
+            if (body == null) {
+                return Optional.empty();
+            }
+            JsonNode route = body.path("routes").path(0);
             JsonNode duration = route.path("summary").path("duration");
             JsonNode distance = route.path("summary").path("distance");
             if (!route.path("result_code").isIntegralNumber() || route.path("result_code").asInt(-1) != 0

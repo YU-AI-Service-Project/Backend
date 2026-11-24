@@ -43,9 +43,17 @@ class EtaBatchClientTests {
                         {"requestId":"batch","items":[
                           {"requestItemId":"2","stationId":"KECO:B","profile":"ALL","status":"INPUT_INCOMPLETE","probability":null},
                           {"requestItemId":"1","stationId":"KECO:A","profile":"ALL","status":"OK","probability":0.0,
-                           "modelVersion":"test-model","featureVersion":"daegu-eta-v4"},
-                          {"requestItemId":"3","stationId":"KECO:WRONG","profile":"ALL","status":"OK","probability":0.7,
-                           "modelVersion":"test-model","featureVersion":"daegu-eta-v4"}
+                           "modelVersion":"test-model","featureVersion":"daegu-eta-v4",
+                           "asOf":"2026-11-12T10:00:00+09:00","requestAt":"2026-11-12T10:00:00+09:00",
+                           "etaSeconds":600,"roadDistanceM":3000,"requestedArrivalAt":"2026-11-12T10:10:00+09:00",
+                           "forecastAt":"2026-11-12T10:10:00+09:00","horizonMinutes":10,
+                           "featureAgeSeconds":0,"forecastRoundingSeconds":0},
+                          {"requestItemId":"3","stationId":"KECO:C","profile":"ALL","status":"OK","probability":0.7,
+                           "modelVersion":"test-model","featureVersion":"daegu-eta-v4",
+                           "asOf":"2026-11-12T10:00:00+09:00","requestAt":"2026-11-12T10:00:00+09:00",
+                           "etaSeconds":600,"roadDistanceM":3000,"requestedArrivalAt":"2026-11-12T10:10:00+09:00",
+                           "forecastAt":"2026-11-12T10:15:00+09:00","horizonMinutes":15,
+                           "featureAgeSeconds":0,"forecastRoundingSeconds":300}
                         ]}
                         """.getBytes(StandardCharsets.UTF_8);
                 exchange.sendResponseHeaders(200, result.length);

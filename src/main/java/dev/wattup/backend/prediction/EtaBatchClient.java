@@ -11,6 +11,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -63,11 +65,11 @@ final class EtaBatchClient {
                 return Optional.empty();
             }
             JsonNode root = json.readTree(response.body());
-            if (!requestId.equals(root.path("requestId").asText()) || !root.path("items").isArray()
+            if (root == null || !requestId.equals(root.path("requestId").asText()) || !root.path("items").isArray()
                     || root.path("items").size() > MAX_ITEMS) {
                 return Optional.empty();
             }
-            return Optional.of(parseItems(root.path("items"), items));
+            return Optional.of(parseItems(root.path("items"), items, requestAt));
         } catch (JacksonException e) {
             return Optional.empty();
         } finally {
@@ -94,7 +96,7 @@ final class EtaBatchClient {
         return null;
     }
 
-    private static Map<String, Result> parseItems(JsonNode response, List<Item> items) {
+    private static Map<String, Result> parseItems(JsonNode response, List<Item> items, Instant requestAt) {
         var expected = items.stream().collect(Collectors.toMap(Item::requestItemId, Function.identity()));
         var results = new HashMap<String, Result>();
         var seen = new HashSet<String>();
@@ -116,12 +118,41 @@ final class EtaBatchClient {
                 JsonNode probability = node.path("probability");
                 String model = node.path("modelVersion").asText("");
                 if (probability.isNumber() && probability.asDouble() >= 0 && probability.asDouble() <= 1
-                        && !model.isBlank() && model.length() <= 100) {
+                        && !model.isBlank() && model.length() <= 100 && matchingForecast(node, item, requestAt)) {
                     results.put(id, new Result(status, probability.asDouble(), model));
                 }
             }
         }
         return Map.copyOf(results);
+    }
+
+    private static boolean matchingForecast(JsonNode node, Item item, Instant requestAt) {
+        var timing = ForecastTiming.calculate(item.asOf, requestAt, item.etaSeconds);
+        return "OK".equals(timing.status())
+                && matchesInstant(node.path("asOf"), item.asOf)
+                && matchesInstant(node.path("requestAt"), requestAt)
+                && matchesInstant(node.path("requestedArrivalAt"), timing.requestedArrivalAt())
+                && matchesInstant(node.path("forecastAt"), timing.forecastAt())
+                && matchesNumber(node.path("etaSeconds"), item.etaSeconds)
+                && matchesNumber(node.path("roadDistanceM"), item.roadDistanceM)
+                && matchesNumber(node.path("horizonMinutes"), timing.horizonMinutes())
+                && matchesNumber(node.path("featureAgeSeconds"), timing.featureAgeSeconds())
+                && matchesNumber(node.path("forecastRoundingSeconds"), timing.forecastRoundingSeconds());
+    }
+
+    private static boolean matchesInstant(JsonNode value, Instant expected) {
+        if (!value.isString()) {
+            return false;
+        }
+        try {
+            return OffsetDateTime.parse(value.asText()).toInstant().equals(expected);
+        } catch (DateTimeParseException e) {
+            return false;
+        }
+    }
+
+    private static boolean matchesNumber(JsonNode value, double expected) {
+        return value.isNumber() && Math.abs(value.asDouble() - expected) <= 0.000001;
     }
 
     record Item(String requestItemId, String stationId, ChargerProfile profile, Instant asOf, int etaSeconds,

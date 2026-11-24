@@ -1,7 +1,9 @@
 package dev.wattup.backend.station;
 
+import dev.wattup.backend.prediction.PredictionController;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -12,8 +14,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-@RestControllerAdvice(assignableTypes = ChargingStationController.class)
-class StationApiAdvice {
+@RestControllerAdvice(assignableTypes = {ChargingStationController.class, PredictionController.class})
+public class StationApiAdvice {
     @ExceptionHandler(StationApiError.class)
     ResponseEntity<Envelope> handle(StationApiError error) {
         List<Detail> details = error.field == null ? List.of() : List.of(new Detail(error.field, error.reason));
@@ -34,6 +36,11 @@ class StationApiAdvice {
     @ExceptionHandler(MissingServletRequestParameterException.class)
     ResponseEntity<Envelope> missingParameter(MissingServletRequestParameterException error) {
         return handle(StationApiError.binding("INVALID_REQUEST", error.getParameterName(), "REQUIRED"));
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    ResponseEntity<Envelope> invalidBody() {
+        return handle(StationApiError.binding("INVALID_REQUEST", "body", "INVALID_JSON"));
     }
 
     @ExceptionHandler({DataAccessException.class, CannotCreateTransactionException.class})
