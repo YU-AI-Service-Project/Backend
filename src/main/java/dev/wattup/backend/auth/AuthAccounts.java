@@ -23,11 +23,13 @@ class AuthAccounts {
     private final JdbcTemplate db;
     private final AuthSessions sessions;
     private final JsonMapper json;
+    private final SocialProofGuard proof;
 
-    AuthAccounts(JdbcTemplate db, AuthSessions sessions, JsonMapper json) {
+    AuthAccounts(JdbcTemplate db, AuthSessions sessions, JsonMapper json, SocialProofGuard proof) {
         this.db = db;
         this.sessions = sessions;
         this.json = json;
+        this.proof = proof;
     }
 
     List<Agreement> agreements() {
@@ -35,12 +37,21 @@ class AuthAccounts {
     }
 
     @Transactional
-    SocialResult social(SocialIdentityVerifier.Identity identity) {
+    SocialResult social(SocialIdentityVerifier.Identity identity, LocalDateTime verifiedSince) {
         var userId = db.query("""
                 SELECT user_id FROM user_social_accounts WHERE provider = ? AND provider_user_id = ?
                 """, (rs, i) -> rs.getLong(1), identity.provider(), identity.subject()).stream().findFirst();
         if (userId.isPresent()) {
             sessions.requireActiveAndLock(userId.get());
+        }
+        proof.requireCurrent(identity.provider(), identity.subject(), verifiedSince);
+        var stillLinked = db.query("""
+                SELECT user_id FROM user_social_accounts WHERE provider = ? AND provider_user_id = ? FOR UPDATE
+                """, (rs, i) -> rs.getLong(1), identity.provider(), identity.subject()).stream().findFirst();
+        if (!userId.equals(stillLinked)) {
+            throw new AuthFailure(409, "ACCOUNT_LINK_CONFLICT");
+        }
+        if (userId.isPresent()) {
             return new SocialResult(login(userId.get()), null);
         }
         String picture = httpsPicture(identity.profileImageUrl());
@@ -52,6 +63,8 @@ class AuthAccounts {
 
     @Transactional
     Created socialSignup(String token, String nickname, List<Consent> consents) {
+        Ticket candidate = requireTicket(token, "SOCIAL_SIGNUP", "REGISTRATION_EXPIRED", false);
+        proof.requireCurrent(candidate.provider, candidate.providerSubject, candidate.issuedAt);
         Ticket ticket = requireTicket(token, "SOCIAL_SIGNUP", "REGISTRATION_EXPIRED", true);
         long user = createUser(nickname, ticket.picture, consents);
         try {
@@ -132,7 +145,7 @@ class AuthAccounts {
 
     String ticket(String purpose, Long user, String email, String provider, String subject, String picture, Duration ttl) {
         String token = AuthValues.randomToken();
-        LocalDateTime now = AuthValues.utcNow();
+        LocalDateTime now = proof.now();
         db.update("""
                 INSERT INTO auth_action_tickets (ticket_hash, purpose, user_id, email, provider, provider_user_id,
                     context_json, issued_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -155,11 +168,11 @@ class AuthAccounts {
         }
         return db.query("""
                 SELECT ticket_id, user_id, email, provider, provider_user_id,
-                    JSON_UNQUOTE(context_json), expires_at, consumed_at
+                    JSON_UNQUOTE(context_json), expires_at, consumed_at, issued_at
                 FROM auth_action_tickets WHERE ticket_hash = ? AND purpose = ?
                 """ + (lock ? " FOR UPDATE" : ""), (rs, i) -> new Ticket(rs.getLong(1), rs.getObject(2, Long.class),
                 rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6),
-                rs.getObject(7, LocalDateTime.class), rs.getObject(8, LocalDateTime.class)),
+                rs.getObject(7, LocalDateTime.class), rs.getObject(8, LocalDateTime.class), rs.getObject(9, LocalDateTime.class)),
                 AuthValues.hash(token), purpose).stream().findFirst();
     }
 
@@ -181,7 +194,7 @@ class AuthAccounts {
     }
 
     record Ticket(long id, Long userId, String email, String provider, String providerSubject, String picture,
-                  LocalDateTime expiresAt, LocalDateTime consumedAt) {}
+                  LocalDateTime expiresAt, LocalDateTime consumedAt, LocalDateTime issuedAt) {}
     record Agreement(String type, String version, boolean required, String title, String documentUrl) {}
     record Consent(String type, String version, Boolean agreed) {}
     record User(long userId, String nickname, List<String> providers, String accountStatus) {}

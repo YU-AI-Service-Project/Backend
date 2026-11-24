@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyAdvice;
 
-@RestControllerAdvice(assignableTypes = AuthController.class)
+@RestControllerAdvice(assignableTypes = {AuthController.class, AccountController.class})
 class AuthAdvice implements ResponseBodyAdvice<Object> {
     @ExceptionHandler(AuthFailure.class)
     ResponseEntity<AuthFailure.Envelope> handle(AuthFailure failure) {
