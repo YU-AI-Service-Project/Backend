@@ -102,3 +102,20 @@ Spring Boot는 수집이 완료된 MySQL 이력으로 30분 특징을 만들고,
 `items`에는 순위, 현재 충전기 대수와 최신성, 확인된 경우 도로 거리와 ETA, 예측 확률과 추천 근거가 들어간다. `totalCandidates`는 반경과 필터에 맞는 전체 충전소 수이며, `evaluatedCandidates`는 순위를 계산한 후보 수다. `WATTUP_RECOMMENDATION_CANDIDATE_LIMIT`의 기본값은 10이고 배포 설정 범위는 1–30이다.
 
 현재 가용 대수에는 마지막 확인값을 담고, 순위에는 최근 10분 안에 가용으로 확인된 대수만 사용한다. 예측이 없는 후보가 있으면 모든 후보를 현재 상태·거리·출력 기준으로 정렬한다. 확인한 확률은 그대로 반환하고, 예측이 불가능한 후보의 `probability`는 `null`이다. 최소 출력 때문에 모델이 예측하는 충전기 집합이 달라지면 해당 후보의 확률도 `null`이다. 카카오에서 유효한 경로를 받으면 이력이나 AI 결과가 없어도 도로 거리와 ETA를 제공한다. 순위의 검토용 기준은 [개발 현황](docs/development/PROGRESS.md#범주-d-검증과-인계)에 기록했다.
+
+## 계정과 인증
+
+카카오·Google 인증 후 가입 이력이 있으면 WattUp 토큰을 반환한다. 최초 인증에는 10분짜리 가입 티켓을 반환한다. 이메일 가입은 메일로 받은 코드를 확인하고 10분짜리 가입 티켓을 발급받는 순서다. 두 방식 모두 서버에 게시된 최신 필수 약관에 동의해야 가입할 수 있다. 약관 버전·문서 URL은 운영 정책에 맞게 `agreement_policies`에 등록한다.
+
+| 환경변수 | 용도 |
+| --- | --- |
+| `WATTUP_AUTH_JWT_SECRET` | 32바이트 이상의 별도 무작위 키를 Base64로 인코딩한 JWT 서명 키 |
+| `WATTUP_AUTH_EMAIL_SECRET` | 별도로 생성한 32바이트 이상 Base64 이메일 코드 검증 키 |
+| `WATTUP_AUTH_KAKAO_APP_ID` | 카카오 토큰에서 기대하는 숫자 앱 ID |
+| `WATTUP_AUTH_GOOGLE_CLIENT_ID` | Google ID 토큰에서 기대하는 서버 OAuth 클라이언트 ID |
+| `WATTUP_AUTH_MAIL_FROM` | SMTP 발신 주소 |
+| `SPRING_MAIL_HOST`, `SPRING_MAIL_PORT`, `SPRING_MAIL_USERNAME`, `SPRING_MAIL_PASSWORD` | STARTTLS를 지원하는 SMTP 연결 설정. SMTP 계정 인증을 사용하는 서버는 `SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH=true`를 설정한다. |
+
+액세스 JWT는 한 시간, 갱신 토큰은 발급 후 30일 동안 유효하다. 갱신마다 새 토큰을 발급하며, 유효기간이 남은 이전 갱신 토큰을 다시 제출하면 해당 기기의 세션 전체를 차단한다. 앱은 같은 갱신 토큰을 동시에 보내거나 자동 재시도하지 않도록 갱신 요청을 직렬화한다. 현재 기기 로그아웃에는 Bearer JWT와 같은 세션의 갱신 토큰이 필요하다. 전체 로그아웃과 비밀번호 변경·재설정은 모든 기기에서 기존 JWT와 갱신 토큰을 무효화한다.
+
+이메일 코드는 10분 안에 사용해야 하며 같은 코드의 입력은 5회까지 허용한다. 재발송 시 이전 가입 코드는 폐기한다. 비밀번호 재설정 링크용 토큰은 15분 안에 사용할 수 있고, 비밀번호가 갱신되면 남은 재설정 토큰도 폐기한다. 검색, 상태 조회, 예측, 추천은 비회원도 사용할 수 있다.
