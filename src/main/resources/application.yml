@@ -12,6 +12,8 @@ spring:
     validate-migration-naming: true
 
 wattup:
+  recommendation:
+    candidate-limit: "${WATTUP_RECOMMENDATION_CANDIDATE_LIMIT:10}"
   prediction:
     kakao-rest-api-key: "${WATTUP_KAKAO_REST_API_KEY:}"
     ai-batch-url: "${WATTUP_AI_ETA_BATCH_URL:}"

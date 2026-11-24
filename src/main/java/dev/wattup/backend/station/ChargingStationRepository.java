@@ -3,12 +3,15 @@ package dev.wattup.backend.station;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static dev.wattup.backend.station.StationViews.toInstant;
@@ -17,13 +20,16 @@ import static dev.wattup.backend.station.StationViews.toInstant;
 class ChargingStationRepository {
     private static final String ACTIVE_STATION = "s.source_deleted = FALSE AND s.source_limited = FALSE";
     private static final String ACTIVE_CHARGER = "c.source_deleted = FALSE AND c.source_limited = FALSE";
+    private static final TypeReference<Map<String, Long>> INVENTORY = new TypeReference<>() {};
     private final NamedParameterJdbcTemplate jdbc;
+    private final JsonMapper json;
 
-    ChargingStationRepository(NamedParameterJdbcTemplate jdbc) {
+    ChargingStationRepository(NamedParameterJdbcTemplate jdbc, JsonMapper json) {
         this.jdbc = jdbc;
+        this.json = json;
     }
 
-    List<Nearby> search(StationSearch search, Instant freshAfter) {
+    List<Nearby> search(StationSearch search, Instant freshAfter, boolean includeInventory) {
         var params = new MapSqlParameterSource()
                 .addValue("latitude", search.latitude())
                 .addValue("longitude", search.longitude())
@@ -32,6 +38,7 @@ class ChargingStationRepository {
                 .addValue("earthRadiusM", StationSearch.EARTH_RADIUS_M)
                 .addValue("radiusM", search.radiusM())
                 .addValue("limit", search.limit())
+                .addValue("includeInventory", includeInventory)
                 .addValue("availableOnly", search.availableOnly())
                 .addValue("freshAfter", LocalDateTime.ofInstant(freshAfter, ZoneOffset.UTC));
         String filters = chargerConditions(params, search.filter());
@@ -46,7 +53,10 @@ class ChargingStationRepository {
                   WHERE %s AND s.latitude BETWEEN :south AND :north AND s.longitude IS NOT NULL
                 ), station_status AS (
                   SELECT n.station_id, n.station_name, n.address, n.latitude, n.longitude, n.distance_m,
-                    COUNT(*) AS total_count,
+                    COUNT(*) AS total_count, MAX(c.output_kw) AS output_kw,
+                    CASE WHEN :includeInventory THEN
+                      JSON_OBJECTAGG(CAST(c.charger_id AS CHAR), COALESCE(c.inventory_run_id, 0))
+                    END AS inventory,
                     COUNT(CASE WHEN cs.normalized_status = 'AVAILABLE' THEN 1 END) AS available_count,
                     COUNT(CASE WHEN cs.normalized_status = 'CHARGING' THEN 1 END) AS charging_count,
                     COUNT(CASE WHEN cs.normalized_status = 'UNAVAILABLE' THEN 1 END) AS other_count,
@@ -75,7 +85,8 @@ class ChargingStationRepository {
                     toInstant(rs.getObject("oldest_at", LocalDateTime.class)));
             return new Nearby(rs.getString("station_id"), rs.getString("station_name"), rs.getString("address"),
                     rs.getBigDecimal("latitude"), rs.getBigDecimal("longitude"), rs.getDouble("distance_m"),
-                    status, rs.getLong("total_matches"));
+                    status, rs.getLong("total_matches"), rs.getBigDecimal("output_kw"), rs.getInt("fresh_available_count"),
+                    includeInventory ? json.readValue(rs.getString("inventory"), INVENTORY) : Map.of());
         });
     }
 
@@ -141,7 +152,8 @@ class ChargingStationRepository {
     }
 
     record Nearby(String stationId, String name, String address, BigDecimal latitude, BigDecimal longitude,
-                  double distanceM, StationViews.StatusSummary status, long totalMatches) {
+                  double distanceM, StationViews.StatusSummary status, long totalMatches, BigDecimal outputKw,
+                  int freshAvailableCount, Map<String, Long> inventory) {
     }
 
     record Station(String stationId, String name, String address, BigDecimal latitude, BigDecimal longitude,

@@ -6,7 +6,8 @@
 - 초기 개발 환경·MySQL Flyway V1·CI는 PR [#1](https://github.com/YU-AI-Service-Project/Backend/pull/1)의 병합 커밋 `6ff8050`을 기준으로 재사용한다.
 - 완료 범주 A · 공단 HTTP 클라이언트, 메타데이터·상태 적재, 실행 이력, 중복 실행 방지, 재시도·일 한도와 스케줄링. PR [#3](https://github.com/YU-AI-Service-Project/Backend/pull/3)을 `550fd70`으로 Squash Merge했다.
 - 완료 범주 B · 비회원 주변 검색, 상세, 충전기 목록, 현재 상태. PR [#4](https://github.com/YU-AI-Service-Project/Backend/pull/4)를 `7b3cb76`으로 Squash Merge했다.
-- 현재 범주 C · `feat/eta-ai-integration`. 비회원 단건·배치 도착 예측과 Spring Boot 연동을 구현했다. [GitHub PR 검색](https://github.com/YU-AI-Service-Project/Backend/pulls?q=is%3Apr+head%3Afeat%2Feta-ai-integration)
+- 완료 범주 C · 비회원 단건·배치 도착 예측과 Spring Boot 클라이언트. PR [#5](https://github.com/YU-AI-Service-Project/Backend/pull/5)를 `388e5bd`로 Squash Merge했다. 실제 FastAPI·카카오 연동은 별도 검증 대상이다.
+- 현재 범주 D · `feat/recommendation`. 서버 Top-3 추천과 Android용 통합 응답을 구현했다. [GitHub PR 검색](https://github.com/YU-AI-Service-Project/Backend/pulls?q=is%3Apr+head%3Afeat%2Frecommendation)
 - 범주 A는 수집 내부 서비스에 집중한다. 관리자 HTTP 49–51은 인증·운영 정책과 함께 H에서 제공한다. 공단 실연동은 인증키와 실호출 승인 후 검증한다.
 - FastAPI 추론 경로 47·48의 소유자는 AI 서버다. Spring Boot는 계약 및 호출 클라이언트를 담당한다. 52번 AI 연결 상태는 Spring Boot 소유다.
 - 각 범주의 CI와 병합 상태는 해당 PR을 기준으로 기록한다.
@@ -34,7 +35,16 @@
 - ZIP의 `API_ETA_연동규격.md`와 `ai-eta-v4.openapi.json`은 `/internal/v2/arrival-predictions/batch`를 초안으로 제시한다. API 48번의 자체 경로는 유지하며, 배포 URL과 인증은 AI 팀과 합의한 값으로 설정한다. ZIP에는 실행 가능한 추론 함수와 모델 파일이 있다. 운영 FastAPI HTTP 서버는 아직 검증 대상이다.
 - 동일한 합성 충전기 이력으로 ZIP의 `observation_builder.py`와 Java 계산의 입력 필드 29개를 대조했다. `predict_eta.py` 오프라인 재생에서 15분 격자, 확률 `0.975582926408748`, 지연 및 이력 부족 시 확률 `null`을 확인했다. 이는 재현용 결과다.
 - 로컬 Java 25·MySQL 8.4에서 `mvnw.cmd clean verify` 전체 34개 통과. 단건과 최대 30건, 일부 장애, 잘못 매칭된 예측 시각을 검증했다. 운영 데이터 규모, 카카오 실호출 및 실제 FastAPI 배포 연동은 미검증이다. 모델 카드는 `production_ready=false`다.
-- 다음 범주는 D의 Top-3 추천이다. 순위 가중치와 폴백 정책은 팀의 확정 상태를 확인한다.
+- [PR CI](https://github.com/YU-AI-Service-Project/Backend/actions/runs/45363662885)에서 전체 테스트 34개가 통과했다.
+
+## 범주 D 검증과 인계
+
+- 명세 7번의 서버 Top-3 계약을 유지한다. 서버에서 후보를 선별하면 현재 상태·경로·예측을 한 응답에서 조합하고 동점 처리도 일관되게 적용할 수 있다. Android에서 순위를 계산하려면 전체 후보와 평가 조건을 받아야 하고 화면마다 결과가 달라질 수 있다. Android가 별도 정렬을 제공할 경우 후보 배열 범위와 표시 정책은 팀에서 합의한다.
+- 멘토링에서는 낮을수록 좋은 `직선거리(km) × 2 + (1 − 가용 확률) × 15`를 비교안으로 제시했다. 이 식은 확률 0.20 차이와 거리 1.5km 차이를 같은 비용으로 보고, 현재 상태·출력·예측 미확인 데이터를 다루지 않는다.
+- 구현한 검토용 점수는 0–1로 정규화했다. 도착 확률 50%, 최근 가용 대수 비율 25%, 반경 대비 직선거리 20%, 적합 충전기 최대 출력 5%를 더한다. 거리 점수는 `1 − 직선거리 / 반경`, 출력 점수는 `min(출력 / 350kW, 1)`이다. 동점은 직선거리와 충전소 ID 순으로 처리한다. 카카오 도로 거리와 ETA는 응답에 제공하며 후보 간 거리 지표는 같은 기준으로 비교한다.
+- 확률을 확인할 수 없는 후보가 있으면 모든 후보에 현재 상태·직선거리·출력의 같은 기준을 적용한다. 확인한 확률은 화면에 제공하고, 확인하지 못한 확률은 `null`을 유지한다. 최소 출력 때문에 모델의 전체 프로필과 후보 충전기 집합이 달라지거나 조회 사이에 인벤토리 버전이 바뀌는 경우에도 같은 폴백을 사용한다. 이 가중치와 폴백 정책은 팀 승인 전 검토안이다.
+- 로컬 Java 25·MySQL 8.4에서 전체 테스트 46개가 통과했다. HTTP/MySQL과 루프백 테스트에서 빈 결과, 최대 3곳, 필터·동점·최신성, 1·10·30건의 배치 및 일부 장애, 경로 시간 제한을 확인했다. 해당 실행의 루프백 테스트 케이스 소요 시간은 각각 16·10·14ms였다. 실제 카카오·FastAPI 운영 연동과 Android 실기기는 별도 검증 대상이다.
+- 다음 범주는 E의 소셜 로그인과 세션이다. 이메일 가입 여부와 실제 OAuth 자격증명 확정 상태를 확인한다.
 
 ## API 52개 추적표
 
@@ -48,7 +58,7 @@
 | 4 | `GET /api/charging-stations/{stationId}/status` | 최신 상태·가용 대수·갱신 시각 | 핵심 | B | 구현됨 | [Controller](../../src/main/java/dev/wattup/backend/station/ChargingStationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/station/ChargingStationApiTests.java) |
 | 5 | `GET /api/charging-stations/{stationId}/prediction` | 충전소 단건 예측 | 핵심 | C | ETA 구현 · 실연동 대기 | [Controller](../../src/main/java/dev/wattup/backend/prediction/PredictionController.java) · [HTTP 테스트](../../src/test/java/dev/wattup/backend/prediction/PredictionApiTests.java) |
 | 6 | `POST /api/predictions/batch` | 지도/목록용 다중 충전소 예측 | 핵심 | C | ETA 구현 · 실연동 대기 | [Controller](../../src/main/java/dev/wattup/backend/prediction/PredictionController.java) · [HTTP 테스트](../../src/test/java/dev/wattup/backend/prediction/PredictionApiTests.java) |
-| 7 | `GET /api/recommendations` | 최대 3곳 추천·추천 근거 | 핵심 | D | 미구현 | — |
+| 7 | `GET /api/recommendations` | 최대 3곳 추천·추천 근거 | 핵심 | D | 구현 · 순위 기준 검토 중 | [Controller](../../src/main/java/dev/wattup/backend/station/RecommendationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/station/ChargingStationApiTests.java) |
 | 8 | `GET /api/locations/search` | 카카오 장소·주소 검색 프록시 | 추가 협의 | G | 미구현 | — |
 | 9 | `GET /api/locations/reverse-geocode` | 선택 좌표의 주소 표현 | 추가 협의 | G | 미구현 | — |
 | 10 | `GET /api/charging-stations/{stationId}/patterns` | 요일·시간대 혼잡 이력 | 확장 | H | 미구현 | — |

@@ -7,6 +7,7 @@ import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -118,6 +119,7 @@ class EtaHistoryRepository {
         var candidates = new HashMap<String, Candidate>();
         accumulators.forEach((station, history) -> candidates.put(station,
                 new Candidate(history.latitude, history.longitude, history.statusPollAt,
+                        history.missingOutput ? null : history.minimumOutputKw, Map.copyOf(history.inventory),
                         EtaFeatures.build(asOf, profile, history.samples,
                         history.reliableSamples(), history.changes).orElseGet(Map::of))));
         return candidates;
@@ -136,13 +138,23 @@ class EtaHistoryRepository {
             return;
         }
         int sampleIndex = row.getInt("sample_index");
+        BigDecimal outputKw = row.getBigDecimal("output_kw");
+        if (sampleIndex == EtaFeatures.SAMPLE_COUNT - 1) {
+            history.inventory.put(row.getString("charger_id"), row.getLong("inventory_run_id"));
+            if (outputKw == null) {
+                history.missingOutput = true;
+            } else if (history.minimumOutputKw == null || outputKw.compareTo(history.minimumOutputKw) < 0) {
+                history.minimumOutputKw = outputKw;
+            }
+        }
         String status = row.getString("raw_status_code");
         if (status == null && sampleIndex < EtaFeatures.SAMPLE_COUNT - 1) {
             return;
         }
         LocalDateTime chargeStartedAt = row.getObject("charge_started_at", LocalDateTime.class);
         history.samples.get(sampleIndex).add(new EtaFeatures.Reading(status, code,
-                row.getDouble("output_kw"), chargeStartedAt == null ? null : chargeStartedAt.toInstant(ZoneOffset.UTC)));
+                outputKw == null ? 0 : outputKw.doubleValue(),
+                chargeStartedAt == null ? null : chargeStartedAt.toInstant(ZoneOffset.UTC)));
         if (!row.getBoolean("reliable")) {
             history.unreliable[sampleIndex] = true;
         }
@@ -155,7 +167,11 @@ class EtaHistoryRepository {
         }
     }
 
-    record Candidate(Double latitude, Double longitude, Instant statusPollAt, Map<String, Number> features) {
+    record Candidate(Double latitude, Double longitude, Instant statusPollAt, BigDecimal minimumProfileOutputKw,
+                     Map<String, Long> inventory, Map<String, Number> features) {
+        boolean matchesOutput(BigDecimal minOutputKw) {
+            return minimumProfileOutputKw != null && minimumProfileOutputKw.compareTo(minOutputKw) >= 0;
+        }
     }
 
     private static final class History {
@@ -165,6 +181,9 @@ class EtaHistoryRepository {
                 .<List<EtaFeatures.Reading>>mapToObj(i -> new ArrayList<>()).toList();
         final boolean[] unreliable = new boolean[EtaFeatures.SAMPLE_COUNT];
         Instant statusPollAt;
+        BigDecimal minimumOutputKw;
+        boolean missingOutput;
+        final Map<String, Long> inventory = new HashMap<>();
         int changes;
 
         History(Double latitude, Double longitude) {

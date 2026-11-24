@@ -94,3 +94,11 @@ GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, INDEX, REFERENCES
 Spring Boot는 수집이 완료된 MySQL 이력으로 30분 특징을 만들고, 카카오에서 도로 ETA를 조회한 후 FastAPI에 한 번에 전달한다. FastAPI의 `OK`는 항목 ID, 충전소, 프로필, 입력 시각과 계산된 예측 시각이 일치할 때만 사용한다. 응답의 `requestedArrivalAt`은 ETA 기준 도착 예정 시각이며 `forecastAt`은 5분 격자상의 모델 예측 시각이다. 예측할 수 없는 항목은 이유와 `probability: null`을 반환한다.
 
 상태 수집이 450초 넘게 지연되거나, 30분 관측을 확인할 수 없거나, 예측 범위를 벗어나면 모델을 호출하지 않는다. 카카오 호출은 서버 인스턴스당 동시 8개, 요청당 최대 30개이며 경로 조회 전체에 9초 제한을 둔다. FastAPI 호출은 시도당 2초이며 일시적 장애에서 한 번 재시도한다. 운영 키와 실제 FastAPI 배포의 통합 검증은 별도로 진행한다.
+
+## 충전소 추천
+
+`GET /api/recommendations`는 `latitude`, `longitude`, `profile`을 받는다. `radiusM` 기본값은 3000m다. `minOutputKw`로 출력 조건을 지정할 수 있고 `limit`은 1–3이다. 모드 기본값은 `ARRIVAL_ETA`다.
+
+`items`에는 순위, 현재 충전기 대수와 최신성, 확인된 경우 도로 거리와 ETA, 예측 확률과 추천 근거가 들어간다. `totalCandidates`는 반경과 필터에 맞는 전체 충전소 수이며, `evaluatedCandidates`는 순위를 계산한 후보 수다. `WATTUP_RECOMMENDATION_CANDIDATE_LIMIT`의 기본값은 10이고 배포 설정 범위는 1–30이다.
+
+현재 가용 대수에는 마지막 확인값을 담고, 순위에는 최근 10분 안에 가용으로 확인된 대수만 사용한다. 예측이 없는 후보가 있으면 모든 후보를 현재 상태·거리·출력 기준으로 정렬한다. 확인한 확률은 그대로 반환하고, 예측이 불가능한 후보의 `probability`는 `null`이다. 최소 출력 때문에 모델이 예측하는 충전기 집합이 달라지면 해당 후보의 확률도 `null`이다. 카카오에서 유효한 경로를 받으면 이력이나 AI 결과가 없어도 도로 거리와 ETA를 제공한다. 순위의 검토용 기준은 [개발 현황](docs/development/PROGRESS.md#범주-d-검증과-인계)에 기록했다.

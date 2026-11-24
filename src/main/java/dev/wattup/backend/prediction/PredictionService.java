@@ -2,6 +2,7 @@ package dev.wattup.backend.prediction;
 
 import dev.wattup.backend.station.ChargerProfile;
 
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -19,23 +20,42 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
-final class PredictionService {
+public final class PredictionService {
     private static final String FEATURE_VERSION = EtaBatchClient.FEATURE_VERSION;
     private final EtaHistoryRepository history;
     private final KakaoRouteClient routes;
     private final EtaBatchClient ai;
     private final Clock clock;
+    private final Duration routeBudget;
     private final Semaphore activeBatches = new Semaphore(4);
     private final Semaphore activeRoutes = new Semaphore(8, true);
 
     PredictionService(EtaHistoryRepository history, KakaoRouteClient routes, EtaBatchClient ai, Clock clock) {
+        this(history, routes, ai, clock, Duration.ofSeconds(9));
+    }
+
+    PredictionService(EtaHistoryRepository history, KakaoRouteClient routes, EtaBatchClient ai, Clock clock,
+                      Duration routeBudget) {
         this.history = history;
         this.routes = routes;
         this.ai = ai;
         this.clock = clock;
+        this.routeBudget = routeBudget;
     }
 
     Batch predict(List<String> stationIds, ChargerProfile profile, PredictionController.Origin origin) {
+        return predict(stationIds, profile, origin, null, null);
+    }
+
+    public Batch predictForRecommendation(List<String> stationIds, ChargerProfile profile, double latitude,
+                                          double longitude, BigDecimal minOutputKw,
+                                          Map<String, Map<String, Long>> inventories) {
+        return predict(stationIds, profile, new PredictionController.Origin(latitude, longitude), minOutputKw,
+                inventories);
+    }
+
+    private Batch predict(List<String> stationIds, ChargerProfile profile, PredictionController.Origin origin,
+                          BigDecimal minOutputKw, Map<String, Map<String, Long>> inventories) {
         String requestId = UUID.randomUUID().toString();
         Instant startedAt = clock.instant();
         if (!activeBatches.tryAcquire()) {
@@ -46,20 +66,27 @@ final class PredictionService {
             Instant asOf = Instant.ofEpochSecond(Math.floorDiv(startedAt.getEpochSecond(), EtaFeatures.GRID_SECONDS)
                     * EtaFeatures.GRID_SECONDS);
             var candidates = history.load(stationIds, profile, asOf);
-            var resolvedRoutes = loadRoutes(candidates, origin, asOf);
+            var resolvedRoutes = loadRoutes(candidates, origin, asOf, inventories != null);
             Instant requestAt = clock.instant().truncatedTo(ChronoUnit.MILLIS);
             var prepared = new HashMap<String, Prediction>();
             var items = new ArrayList<EtaBatchClient.Item>();
             for (String stationId : stationIds) {
                 var candidate = candidates.get(stationId);
                 var route = resolvedRoutes.get(stationId);
-                String status = unavailableReason(candidate, asOf);
-                if (status == null && (route == null || Duration.between(route.generatedAt(), requestAt)
-                        .compareTo(Duration.ofSeconds(30)) > 0)) {
+                if (route != null && Duration.between(route.generatedAt(), requestAt).compareTo(Duration.ofSeconds(30)) > 0) {
+                    route = null;
+                }
+                String status = candidate != null && minOutputKw != null && !candidate.matchesOutput(minOutputKw)
+                        ? "OUTPUT_FILTER_NOT_SUPPORTED" : unavailableReason(candidate, asOf);
+                if (status == null && inventories != null && !candidate.inventory().equals(inventories.get(stationId))) {
+                    status = "INVENTORY_CHANGED";
+                }
+                if (status == null && route == null) {
                     status = "ROUTE_UNAVAILABLE";
                 }
                 if (status != null) {
-                    prepared.put(stationId, result(status, candidate == null ? null : asOf, requestAt, route, null));
+                    var timing = route == null ? null : ForecastTiming.calculate(asOf, requestAt, route.etaSeconds());
+                    prepared.put(stationId, result(status, candidate == null ? null : asOf, requestAt, route, timing));
                     continue;
                 }
                 var timing = ForecastTiming.calculate(asOf, requestAt, route.etaSeconds());
@@ -96,17 +123,18 @@ final class PredictionService {
     }
 
     private Map<String, KakaoRouteClient.Route> loadRoutes(Map<String, EtaHistoryRepository.Candidate> candidates,
-                                                          PredictionController.Origin origin, Instant asOf) {
+                                                          PredictionController.Origin origin, Instant asOf,
+                                                          boolean includeRoutesWithoutFeatures) {
         var result = new HashMap<String, KakaoRouteClient.Route>();
         List<Callable<Map.Entry<String, Optional<KakaoRouteClient.Route>>>> lookups = new ArrayList<>();
         candidates.forEach((stationId, candidate) -> {
-            if (unavailableReason(candidate, asOf) == null && candidate.latitude() != null
+            if ((includeRoutesWithoutFeatures || unavailableReason(candidate, asOf) == null) && candidate.latitude() != null
                     && candidate.longitude() != null) {
                 lookups.add(() -> Map.entry(stationId, findRoute(origin, candidate)));
             }
         });
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            for (var task : executor.invokeAll(lookups, 9, TimeUnit.SECONDS)) {
+            for (var task : executor.invokeAll(lookups, routeBudget.toMillis(), TimeUnit.MILLISECONDS)) {
                 try {
                     var route = task.get();
                     route.getValue().ifPresent(value -> result.put(route.getKey(), value));
@@ -142,16 +170,20 @@ final class PredictionService {
                 timing == null ? null : timing.featureAgeSeconds(), null, FEATURE_VERSION);
     }
 
-    record Batch(String requestId, List<StationPrediction> items) {
+    public record Batch(String requestId, List<StationPrediction> items) {
     }
 
-    record StationPrediction(String stationId, ChargerProfile profile, String mode, Prediction prediction) {
+    public record StationPrediction(String stationId, ChargerProfile profile, String mode, Prediction prediction) {
     }
 
-    record Prediction(String status, Double probability, Instant asOf, Instant requestAt, Instant routeRequestedAt,
+    public record Prediction(String status, Double probability, Instant asOf, Instant requestAt, Instant routeRequestedAt,
                       Instant etaGeneratedAt, Integer etaSeconds, Integer roadDistanceM, String etaProvider,
                       Instant requestedArrivalAt, Instant forecastAt, Integer horizonMinutes, Double forecastRoundingSeconds,
                       Double featureAgeSeconds, String modelVersion, String featureVersion) {
+        public static Prediction unavailable() {
+            return result("MODEL_UNAVAILABLE", null, null, null, null);
+        }
+
         Prediction withInference(EtaBatchClient.Result result) {
             return new Prediction(result == null ? "MODEL_UNAVAILABLE" : result.status(),
                     result == null ? null : result.probability(), asOf, requestAt, routeRequestedAt, etaGeneratedAt,

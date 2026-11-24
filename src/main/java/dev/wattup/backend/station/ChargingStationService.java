@@ -21,13 +21,21 @@ class ChargingStationService {
 
     SearchResult search(StationSearch search) {
         Instant freshAfter = freshAfter();
-        var rows = stations.search(search, freshAfter);
+        var rows = stations.search(search, freshAfter, false);
         var items = rows.stream().map(row -> new StationSummary(row.stationId(), row.name(), row.address(),
                 row.latitude(), row.longitude(), Math.round(row.distanceM()), row.status().current(),
                 row.status().freshness(freshAfter), row.status().asOf())).toList();
         var parameters = new SearchParameters(search.latitude(), search.longitude(), search.radiusM(),
                 search.filter().profile(), "STRAIGHT_LINE");
         return new SearchResult(parameters, rows.isEmpty() ? 0 : rows.getFirst().totalMatches(), items);
+    }
+
+    RecommendationCandidates recommendationCandidates(StationSearch search) {
+        Instant freshAfter = freshAfter();
+        return new RecommendationCandidates(stations.search(search, freshAfter, true), freshAfter);
+    }
+
+    record RecommendationCandidates(List<ChargingStationRepository.Nearby> items, Instant freshAfter) {
     }
 
     StationDetails details(String id, ChargerFilter filter) {
