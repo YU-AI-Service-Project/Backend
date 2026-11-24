@@ -12,7 +12,7 @@ final class StationViews {
 
     enum Freshness { FRESH, STALE, UNKNOWN }
 
-    record Current(ChargerFilter.Profile profile, int totalCount, int availableCount, int chargingCount,
+    record Current(ChargerProfile profile, int totalCount, int availableCount, int chargingCount,
                    int otherCount, int unknownCount) {
     }
 
@@ -25,7 +25,7 @@ final class StationViews {
         }
     }
 
-    record SearchParameters(double latitude, double longitude, int radiusM, ChargerFilter.Profile profile,
+    record SearchParameters(double latitude, double longitude, int radiusM, ChargerProfile profile,
                             String distanceType) {
     }
 
@@ -57,7 +57,7 @@ final class StationViews {
                           Current current, Freshness freshness, Instant asOf, List<Charger> chargers) {
     }
 
-    record StationStatus(String stationId, ChargerFilter.Profile profile, Current current, Freshness freshness,
+    record StationStatus(String stationId, ChargerProfile profile, Current current, Freshness freshness,
                          Instant asOf, String warning) {
     }
 
