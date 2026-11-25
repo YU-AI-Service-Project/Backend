@@ -108,7 +108,7 @@ final class EtaBatchClient {
 
     private HttpResponse<String> send(HttpRequest request) {
         for (int attempt = 0; attempt < 2; attempt++) {
-            var pending = http.sendAsync(request, HttpResponse.BodyHandlers.ofString());
+            var pending = http.sendAsync(request, HttpResponse.BodyHandlers.limiting(HttpResponse.BodyHandlers.ofString(), 1024 * 1024));
             try {
                 var response = pending.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
                 if (attempt == 1 || !Set.of(502, 503, 504).contains(response.statusCode())) {

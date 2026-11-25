@@ -160,8 +160,7 @@ class AuthEmail {
     @Transactional
     void change(Jwt access, String currentPassword, String newPassword) {
         AuthValues.validatePassword(newPassword);
-        long userId = AuthSessions.userId(access);
-        sessions.requireActiveAndLock(userId);
+        long userId = sessions.lockCurrent(access);
         String hash = db.query("SELECT password_hash FROM user_email_credentials WHERE user_id = ? FOR UPDATE",
                 (rs, i) -> rs.getString(1), userId).stream().findFirst()
                 .orElseThrow(() -> new AuthFailure(422, "EMAIL_PASSWORD_NOT_ENABLED"));

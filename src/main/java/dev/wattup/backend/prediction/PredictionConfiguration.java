@@ -8,6 +8,7 @@ import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.net.URI;
+import java.net.InetAddress;
 import java.net.http.HttpClient;
 import java.time.Clock;
 import java.time.Duration;
@@ -19,7 +20,7 @@ class PredictionConfiguration {
             @Value("${wattup.prediction.ai-batch-url}") String aiBatchUrl,
             @Value("${wattup.prediction.ai-bearer-token}") String aiToken) {
         var http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
-        return new EtaBatchClient(http, json, batchEndpoint(aiBatchUrl), aiToken, Duration.ofSeconds(2));
+        return new EtaBatchClient(http, json, serviceEndpoint(aiBatchUrl, aiToken), aiToken, Duration.ofSeconds(2));
     }
 
     @Bean
@@ -33,15 +34,34 @@ class PredictionConfiguration {
         return new PredictionService(history, routes, ai, clock, Duration.ofSeconds(9), quality.getIfAvailable());
     }
 
-    static URI batchEndpoint(String value) {
+    static URI serviceEndpoint(String value, String token) {
         if (value.isBlank()) {
             return null;
         }
-        URI uri = URI.create(value);
+        URI uri;
+        try {
+            uri = URI.create(value);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Invalid prediction service URL");
+        }
         if (!("http".equals(uri.getScheme()) || "https".equals(uri.getScheme())) || uri.getHost() == null
                 || uri.getRawUserInfo() != null || uri.getFragment() != null) {
-            throw new IllegalArgumentException("Invalid prediction AI batch URL");
+            throw new IllegalArgumentException("Invalid prediction service URL");
+        }
+        if (!token.isBlank() && !"https".equals(uri.getScheme()) && !isLoopback(uri.getHost())) {
+            throw new IllegalArgumentException("Prediction service HTTPS is required when a token is configured");
         }
         return uri;
+    }
+
+    private static boolean isLoopback(String host) {
+        if ("localhost".equalsIgnoreCase(host)) {
+            return true;
+        }
+        try {
+            return InetAddress.ofLiteral(host).isLoopbackAddress();
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
     }
 }

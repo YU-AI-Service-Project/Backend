@@ -32,7 +32,7 @@ class RouteEtaTests {
             query.set(exchange.getRequestURI().getQuery());
             byte[] data = response.get().getBytes(StandardCharsets.UTF_8);
             try (exchange) {
-                exchange.sendResponseHeaders(200, data.length);
+                exchange.sendResponseHeaders(200, data.length > 128 * 1024 ? 0 : data.length);
                 exchange.getResponseBody().write(data);
             }
         });
@@ -47,6 +47,10 @@ class RouteEtaTests {
             assertThat(query.get()).contains("origin=128.2,35.1", "destination=128.4,35.3", "summary=true");
             response.set("""
                     {"routes":[{"result_code":0,"summary":{"duration":"0","distance":0}}]}
+                    """);
+            assertThat(route.find(35.1, 128.2, 35.3, 128.4)).isEmpty();
+            response.set(" ".repeat(128 * 1024) + """
+                    {"routes":[{"result_code":0,"summary":{"duration":3494,"distance":19032}}]}
                     """);
             assertThat(route.find(35.1, 128.2, 35.3, 128.4)).isEmpty();
         } finally {

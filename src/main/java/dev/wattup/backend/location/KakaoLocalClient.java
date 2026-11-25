@@ -94,7 +94,7 @@ final class KakaoLocalClient {
         try {
             var request = HttpRequest.newBuilder(uri).timeout(timeout).header("Accept", "application/json")
                     .header("Authorization", "KakaoAK " + key).GET().build();
-            var pending = http.sendAsync(request, HttpResponse.BodyHandlers.ofString());
+            var pending = http.sendAsync(request, HttpResponse.BodyHandlers.limiting(HttpResponse.BodyHandlers.ofString(), 256 * 1024));
             try {
                 var response = pending.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
                 if (response.statusCode() != 200) {

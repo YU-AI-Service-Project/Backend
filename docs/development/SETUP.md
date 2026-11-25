@@ -122,7 +122,7 @@ curl --fail-with-body 'http://127.0.0.1:8080/api/charging-stations?latitude=35.8
 | 공단 데이터 수집 | `WATTUP_KECO_ENABLED`, `WATTUP_KECO_SERVICE_KEY`, `WATTUP_KECO_REGION` | 승인된 환경에서 `true`, 디코딩된 공단 인증키, 두 자리 시·도 코드를 설정합니다. 활성화 시 서버 시작과 함께 API를 호출합니다. |
 | 공단 요청 설정 | `WATTUP_KECO_PAGE_SIZE`, `WATTUP_KECO_DAILY_LIMIT` | 기본값은 각각 `9999`, `1000`입니다. 승인된 요청 한도에 맞춥니다. |
 | 경로·장소 검색 | `WATTUP_KAKAO_REST_API_KEY`, `WATTUP_KAKAO_LOCAL_REST_API_KEY` | 각각 카카오모빌리티 자동차 경로와 카카오 로컬 검색에 사용합니다. |
-| ETA 예측 | `WATTUP_AI_ETA_BATCH_URL`, `WATTUP_AI_ETA_BEARER_TOKEN` | FastAPI 배치 전체 URL과 서버에서 인증을 요구할 경우 토큰을 설정합니다. 도착 예측에는 카카오 경로 키와 수집 이력도 필요합니다. |
+| ETA 예측 | `WATTUP_AI_ETA_BATCH_URL`, `WATTUP_AI_ETA_BEARER_TOKEN` | FastAPI 배치 전체 URL과 서버에서 인증을 요구할 경우 토큰을 설정합니다. 토큰을 전송하는 원격 URL은 HTTPS를 사용합니다. 도착 예측에는 카카오 경로 키와 수집 이력도 필요합니다. |
 | ETA 예측 품질 | `WATTUP_PREDICTION_QUALITY_CAPTURE_ENABLED` | 기본값 `false`. `true`로 설정하면 앞으로 검증되는 예측의 평가 표본을 저장합니다. |
 | 추천 후보 수 | `WATTUP_RECOMMENDATION_CANDIDATE_LIMIT` | 기본값 `10`, 범위 `1–30`입니다. |
 | 회원 토큰 | `WATTUP_AUTH_JWT_SECRET` | 무작위 32바이트 이상의 값을 Base64로 인코딩합니다. |
@@ -130,7 +130,7 @@ curl --fail-with-body 'http://127.0.0.1:8080/api/charging-stations?latitude=35.8
 | 이메일 가입·재설정 | `WATTUP_AUTH_EMAIL_SECRET`, `WATTUP_AUTH_MAIL_FROM`, `SPRING_MAIL_HOST`, `SPRING_MAIL_PORT`, `SPRING_MAIL_USERNAME`, `SPRING_MAIL_PASSWORD` | JWT와 별개인 Base64 키와 STARTTLS를 지원하는 SMTP 정보를 설정합니다. SMTP 인증 설정은 [계정과 인증](../../README.md#계정과-인증)을 참고합니다. |
 | 회원 탈퇴·카카오 연결 해제 | `WATTUP_ACCOUNT_WITHDRAWAL_ENABLED`, `WATTUP_AUTH_KAKAO_ADMIN_KEY` | 탈퇴는 기본적으로 꺼져 있습니다. 카카오 연결 해제에는 로그인에 사용하는 앱의 관리자 키가 필요합니다. |
 | 내부 운영 API | `WATTUP_INTERNAL_ALLOWED_ADDRESSES`, `WATTUP_INTERNAL_READ_TOKEN`, `WATTUP_INTERNAL_WRITE_TOKEN`, `WATTUP_INTERNAL_MANUAL_COLLECTION_ENABLED` | 기본 접근 IP는 루프백입니다. 읽기와 쓰기에 서로 다른 43–128자리 Base64URL 형식 토큰을 사용합니다. 수동 수집은 기본적으로 꺼져 있습니다. |
-| FastAPI 상태 조회 | `WATTUP_AI_HEALTH_URL`, `WATTUP_AI_HEALTH_TOKEN` | 별도로 제공되는 상태 URL과 필요한 경우 전용 토큰을 설정합니다. |
+| FastAPI 상태 조회 | `WATTUP_AI_HEALTH_URL`, `WATTUP_AI_HEALTH_TOKEN` | 별도로 제공되는 상태 URL과 필요한 경우 전용 토큰을 설정합니다. 토큰을 전송하는 원격 URL은 HTTPS를 사용합니다. |
 
 ## 7. 통합 테스트 또는 JAR 실행
 

@@ -33,7 +33,7 @@ public class PredictionHealthController {
     PredictionHealthController(JsonMapper json, EtaBatchClient batch,
             @Value("${wattup.prediction.ai-health-url:}") String probe,
             @Value("${wattup.prediction.ai-health-token:}") String token) {
-        this(json, batch, PredictionConfiguration.batchEndpoint(probe), token,
+        this(json, batch, PredictionConfiguration.serviceEndpoint(probe, token), token,
                 HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build());
     }
 
@@ -70,7 +70,7 @@ public class PredictionHealthController {
             if (!token.isBlank()) {
                 request.header("Authorization", "Bearer " + token);
             }
-            var result = http.sendAsync(request.build(), HttpResponse.BodyHandlers.ofString());
+            var result = http.sendAsync(request.build(), HttpResponse.BodyHandlers.limiting(HttpResponse.BodyHandlers.ofString(), 16 * 1024));
             try {
                 var response = result.get(2, TimeUnit.SECONDS);
                 if (response.statusCode() != 200) {

@@ -1,5 +1,6 @@
 package dev.wattup.backend.auth;
 
+import com.sun.net.httpserver.HttpServer;
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
@@ -21,7 +22,10 @@ import org.springframework.web.client.RestTemplate;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Instant;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.Date;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -46,6 +50,41 @@ class SocialIdentityVerifierTests {
     static void generateTestKeys() throws JOSEException {
         key = new RSAKeyGenerator(2048).keyID("test-key").generate();
         otherKey = new RSAKeyGenerator(2048).keyID("test-key").generate();
+    }
+
+    @Test
+    void providerHttpClientDoesNotFollowRedirectsAndRejectsAnOversizedResponse() throws Exception {
+        var secondEndpointCalls = new AtomicInteger();
+        var local = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        local.createContext("/redirect", exchange -> {
+            try (exchange) {
+                exchange.getResponseHeaders().set("Location", "/payload");
+                exchange.sendResponseHeaders(302, -1);
+            }
+        });
+        local.createContext("/payload", exchange -> {
+            secondEndpointCalls.incrementAndGet();
+            try (exchange) {
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders("/payload/error".equals(exchange.getRequestURI().getPath()) ? 400 : 200, 0);
+                exchange.getResponseBody().write(" ".repeat(300_000).getBytes(StandardCharsets.UTF_8));
+            }
+        });
+        local.start();
+        try {
+            var client = SocialIdentityVerifier.client();
+            String base = "http://127.0.0.1:" + local.getAddress().getPort();
+            var redirect = client.getForEntity(base + "/redirect", String.class);
+            assertThat(redirect.getStatusCode()).isEqualTo(HttpStatus.FOUND);
+            assertThat(secondEndpointCalls.get()).isZero();
+            for (String path : new String[]{"/payload", "/payload/error"}) {
+                assertThatThrownBy(() -> client.getForEntity(base + path, String.class))
+                        .isInstanceOf(org.springframework.web.client.ResourceAccessException.class)
+                        .hasMessageContaining("Identity provider response exceeded the configured size");
+            }
+        } finally {
+            local.stop(0);
+        }
     }
 
     @Test

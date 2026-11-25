@@ -44,7 +44,7 @@ final class KakaoRouteClient {
         var request = HttpRequest.newBuilder(URI.create(url)).timeout(timeout)
                 .header("Authorization", "KakaoAK " + key).header("Accept", "application/json").GET().build();
         Instant requestedAt = clock.instant();
-        var pending = http.sendAsync(request, HttpResponse.BodyHandlers.ofString());
+        var pending = http.sendAsync(request, HttpResponse.BodyHandlers.limiting(HttpResponse.BodyHandlers.ofString(), 128 * 1024));
         try {
             var response = pending.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
             if (response.statusCode() != 200) {

@@ -72,8 +72,7 @@ class AuthSessions {
 
     @Transactional
     void logout(Jwt access, String raw) {
-        long userId = userId(access);
-        requireActiveAndLock(userId);
+        long userId = lockCurrent(access);
         var row = session(tokenHash(raw));
         if (row.userId != userId || !row.family.equals(access.getClaimAsString("sid"))) {
             throw new AuthFailure(401, "REFRESH_TOKEN_INVALID");
@@ -83,8 +82,7 @@ class AuthSessions {
 
     @Transactional
     void logoutAll(Jwt access) {
-        long userId = userId(access);
-        requireActiveAndLock(userId);
+        long userId = lockCurrent(access);
         revoke(userId, null, "LOGOUT_ALL");
     }
 
