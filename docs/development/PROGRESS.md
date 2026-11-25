@@ -11,7 +11,7 @@
 - 완료 범주 E · 소셜 로그인, 약관, 토큰·세션, 이메일 가입·비밀번호 API 14개. PR [#7](https://github.com/YU-AI-Service-Project/Backend/pull/7)을 `a245d73`으로 Squash Merge했다.
 - 완료 범주 F · 내 계정·탈퇴 API 11개. PR [#8](https://github.com/YU-AI-Service-Project/Backend/pull/8)을 `22b72f5`로 Squash Merge했다.
 - 완료 범주 G · 즐겨찾기·검색 설정·장소 주소 조회 API 8개. PR [#9](https://github.com/YU-AI-Service-Project/Backend/pull/9)을 `2d8d212`로 Squash Merge했다.
-- 현재 범주 H · `feat/remaining-apis`. 분석·공지·신고·내부 운영 API와 OpenAPI를 제공한다. [GitHub PR 검색](https://github.com/YU-AI-Service-Project/Backend/pulls?q=is%3Apr+head%3Afeat%2Fremaining-apis)
+- 완료 범주 H · 분석·공지·신고·내부 운영 API와 OpenAPI를 제공한다. PR [#10](https://github.com/YU-AI-Service-Project/Backend/pull/10)이 `6ebca98`로 병합됐다.
 - 범주 A의 수집 내부 서비스는 H의 관리자 HTTP 49–51에서 재사용한다. 공단 실연동은 인증키와 실호출 승인 후 검증한다.
 - FastAPI 추론 경로 47·48의 소유자는 AI 서버다. Spring Boot는 계약 및 호출 클라이언트를 담당한다. 52번 AI 연결 상태는 Spring Boot 소유다.
 - 각 범주의 CI와 병합 상태는 해당 PR을 기준으로 기록한다.
@@ -85,6 +85,29 @@
 - Flyway V9는 공지와 신고, V10은 수동 수집 요청을 추가한다. 신고에는 JWT가 필요하며 접수 정보는 회원 탈퇴 시 삭제한다. 공지 작성 권한, 신고 열람·보관 절차 및 비회원 접수 정책은 운영 전에 확정한다.
 - 내부 경로는 기본적으로 루프백 연결과 별도의 Bearer 토큰을 요구한다. 수동 수집은 쓰기 토큰과 활성화 설정이 필요하다. 역방향 프록시의 접근 통제와 FastAPI 상태 응답 계약은 배포 환경에서 확인한다.
 - 실제 공단·카카오·FastAPI 호출, SMTP, Android 실기기, 운영 데이터 규모의 부하 검증은 배포 환경을 확보한 후 진행한다.
+- [PR CI](https://github.com/YU-AI-Service-Project/Backend/actions/runs/45528160705)와 [병합 후 main CI](https://github.com/YU-AI-Service-Project/Backend/actions/runs/45528468495)가 모두 통과했다.
+
+## 병합 후 ETA v4 HTTP 검증
+
+- 2026-11-25에 `main`의 `6ebca98`에서 Java 25·MySQL 8.4로 `mvnw.cmd clean verify`를 재실행했다. 91개 통과, 실패·건너뜀 0개다.
+- `WattUp_ETA_v4_프로토타입_공유.zip`의 `predict_eta.py`, `route_eta.py`, 모델, 모델 카드, 보정기를 써서 루프백 FastAPI를 실행했다. Spring Boot의 `EtaFeatures`에서 만든 합성 관측 특징을 `EtaBatchClient`로 전송했다. 현장 충전 데이터와 외부 API 호출은 없었다.
+- 1·10·30건 요청에서 항목 식별자 매칭, 15분 격자, 확률 `0.975582926408748` 재현을 확인했다. 특징이 451초 지난 항목은 `STALE_FEATURES`와 `null` 확률을 반환했다. 상태 조회는 순서대로 `DEGRADED`, 유효 추론 뒤 `HEALTHY`, 오래된 특징 요청 뒤 `DEGRADED`를 반환했다.
+- 최초 요청은 워밍업으로 제외했다. 크기별로 20회씩 순차 요청한 Java 클라이언트의 로컬 HTTP 왕복 시간이다.
+
+| 배치 크기 | p50 | p95 |
+| ---: | ---: | ---: |
+| 1 | 6.49 ms | 7.14 ms |
+| 10 | 43.85 ms | 46.01 ms |
+| 30 | 125.98 ms | 129.95 ms |
+
+이 측정 범위에는 로컬 전송·응답 검증·Python 모델 추론이 포함된다. DB 특징 조회, 카카오 ETA, 동시 부하와 배포망은 별도 계측 대상이다.
+
+| 다음 통합 검증 | 필요한 조건 | 통과 기준 |
+| --- | --- | --- |
+| ETA v4 48번·AI 상태 52번 | AI 팀의 테스트용 FastAPI URL·인증·모델 버전 | 단건과 30건에서 동일 입력의 확률·시각이 일치하고 일부 항목 실패 시 나머지 확률이 유지된다. |
+| 공단 수집·카카오 자동차 ETA·장소 검색 | 팀 승인과 테스트 키·허용 호출량 | 완전한 수집 실행으로 최신 상태와 이력이 갱신되고 실제 경로 ETA와 집계가 응답에 반영된다. |
+| 인증·Android | OAuth 테스트 앱·SMTP·Android 테스트 빌드 | 가입·로그인·갱신·탈퇴 및 앱의 현재 상태·ETA·Top-3를 실제 기기에서 확인한다. |
+| 예측 품질 12번·운영 부하 | 예측과 도착 시점 관측을 연결한 표본, 운영 규모 데이터, 팀이 승인한 부하 시나리오 | 검증 표본의 예측과 관측 결과를 비교하고 단건·배치·추천의 응답 시간과 오류율을 기록한다. |
 
 ## API 52개 추적표
 
