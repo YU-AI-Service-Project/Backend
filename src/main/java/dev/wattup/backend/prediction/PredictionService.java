@@ -44,18 +44,28 @@ public final class PredictionService {
     }
 
     Batch predict(List<String> stationIds, ChargerProfile profile, PredictionController.Origin origin) {
-        return predict(stationIds, profile, origin, null, null);
+        return predict(stationIds, profile, origin, null, null, false);
     }
 
     public Batch predictForRecommendation(List<String> stationIds, ChargerProfile profile, double latitude,
                                           double longitude, BigDecimal minOutputKw,
                                           Map<String, Map<String, Long>> inventories) {
         return predict(stationIds, profile, new PredictionController.Origin(latitude, longitude), minOutputKw,
-                inventories);
+                inventories, true);
+    }
+
+    public Batch predictForArea(List<String> stationIds, ChargerProfile profile, double latitude, double longitude,
+                                Map<String, Map<String, Long>> inventories) {
+        if (!ai.configured() || stationIds.isEmpty()) {
+            return new Batch(null, List.of());
+        }
+        return predict(stationIds, profile, new PredictionController.Origin(latitude, longitude), null,
+                inventories, false);
     }
 
     private Batch predict(List<String> stationIds, ChargerProfile profile, PredictionController.Origin origin,
-                          BigDecimal minOutputKw, Map<String, Map<String, Long>> inventories) {
+                          BigDecimal minOutputKw, Map<String, Map<String, Long>> inventories,
+                          boolean includeRoutesWithoutFeatures) {
         String requestId = UUID.randomUUID().toString();
         Instant startedAt = clock.instant();
         if (!activeBatches.tryAcquire()) {
@@ -66,7 +76,7 @@ public final class PredictionService {
             Instant asOf = Instant.ofEpochSecond(Math.floorDiv(startedAt.getEpochSecond(), EtaFeatures.GRID_SECONDS)
                     * EtaFeatures.GRID_SECONDS);
             var candidates = history.load(stationIds, profile, asOf);
-            var resolvedRoutes = loadRoutes(candidates, origin, asOf, inventories != null);
+            var resolvedRoutes = loadRoutes(candidates, origin, asOf, includeRoutesWithoutFeatures);
             Instant requestAt = clock.instant().truncatedTo(ChronoUnit.MILLIS);
             var prepared = new HashMap<String, Prediction>();
             var items = new ArrayList<EtaBatchClient.Item>();

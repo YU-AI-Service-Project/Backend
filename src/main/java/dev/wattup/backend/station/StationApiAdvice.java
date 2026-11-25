@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.UUID;
 
 @RestControllerAdvice(assignableTypes = {ChargingStationController.class, PredictionController.class,
-        RecommendationController.class})
+        RecommendationController.class, StationAnalyticsController.class})
 public class StationApiAdvice {
     @ExceptionHandler(StationApiError.class)
     ResponseEntity<Envelope> handle(StationApiError error) {
