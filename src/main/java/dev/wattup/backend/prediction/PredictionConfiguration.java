@@ -1,5 +1,7 @@
 package dev.wattup.backend.prediction;
 
+import dev.wattup.backend.station.PredictionQualityCapture;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -22,12 +24,13 @@ class PredictionConfiguration {
 
     @Bean
     PredictionService predictionService(EtaHistoryRepository history, JsonMapper json, EtaBatchClient ai,
+            ObjectProvider<PredictionQualityCapture> quality,
             @Value("${wattup.prediction.kakao-rest-api-key}") String kakaoKey) {
         var http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
         var clock = Clock.systemUTC();
         var routes = new KakaoRouteClient(http, json, URI.create("https://apis-navi.kakaomobility.com/v1/directions"),
                 kakaoKey, Duration.ofSeconds(2), clock);
-        return new PredictionService(history, routes, ai, clock);
+        return new PredictionService(history, routes, ai, clock, Duration.ofSeconds(9), quality.getIfAvailable());
     }
 
     static URI batchEndpoint(String value) {

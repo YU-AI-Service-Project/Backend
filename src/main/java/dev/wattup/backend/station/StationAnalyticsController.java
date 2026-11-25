@@ -21,17 +21,21 @@ class StationAnalyticsController {
     private static final String INSUFFICIENT = "INSUFFICIENT_HISTORY";
     private static final String OBSERVATION_BASIS = "CURRENT_PUBLIC_COHORT_FULL_SNAPSHOTS";
     private static final double HIGH_PROBABILITY_THRESHOLD = 0.75;
+    private static final String EVALUATION_BASIS = "FULL_SNAPSHOT_WITHIN_FORECAST_GRID";
     private final ChargingStationRepository stations;
     private final ChargingStationService nearby;
     private final StationAnalyticsRepository observations;
     private final PredictionService predictions;
+    private final PredictionQualityRepository quality;
 
     StationAnalyticsController(ChargingStationRepository stations, ChargingStationService nearby,
-                               StationAnalyticsRepository observations, PredictionService predictions) {
+                               StationAnalyticsRepository observations, PredictionService predictions,
+                               PredictionQualityRepository quality) {
         this.stations = stations;
         this.nearby = nearby;
         this.observations = observations;
         this.predictions = predictions;
+        this.quality = quality;
     }
 
     @GetMapping("/api/charging-stations/{stationId}/patterns")
@@ -66,8 +70,16 @@ class StationAnalyticsController {
     QualityResult quality(@PathVariable String stationId, @RequestParam(defaultValue = "ALL") String profile,
                           @RequestParam(defaultValue = "30") int periodDays) {
         var request = historyRequest(stationId, profile, periodDays);
+        var result = quality.evaluate(request.station, request.profile, request.from, request.to);
+        boolean sufficient = result.sampleCount() >= 30 && result.dayCount() >= 3;
+        var buckets = sufficient ? result.buckets().stream().filter(bucket -> bucket.sampleCount() >= 5)
+                .map(bucket -> new ProbabilityBucket(bucket.index() / 5.0, (bucket.index() + 1) / 5.0,
+                        bucket.sampleCount(), bucket.observedFraction())).toList() : List.<ProbabilityBucket>of();
+        String status = result.sampleCount() == 0 ? "UNVERIFIED_MODEL"
+                : sufficient ? SUFFICIENT : "INSUFFICIENT_EVALUATION";
         return new QualityResult(request.station, request.profile, new Period(request.from, request.to),
-                "UNVERIFIED_MODEL", 0, List.of());
+                status, result.modelVersion(), result.featureVersion(), EVALUATION_BASIS,
+                result.sampleCount(), result.dayCount(), buckets);
     }
 
     @GetMapping("/api/areas/charging-availability")
@@ -130,7 +142,8 @@ class StationAnalyticsController {
                           double observedHours, double observedChargerHours, int observedDays, Long observedChanges,
                           Long observedChargingToAvailable, Double changesPerObservedChargerHour, String dataSufficiency) {}
     record QualityResult(String stationId, ChargerProfile profile, Period requestedPeriod, String dataSufficiency,
-                         long evaluationSampleCount, List<ProbabilityBucket> probabilityBuckets) {}
+                         String modelVersion, String featureVersion, String observationBasis, long evaluationSampleCount,
+                         long evaluationDayCount, List<ProbabilityBucket> probabilityBuckets) {}
     record ProbabilityBucket(double minimumProbability, double maximumProbability, long sampleCount, double observedFraction) {}
     record AreaResult(double latitude, double longitude, int radiusM, ChargerProfile profile, long candidateCount,
                       int evaluatedCandidateCount, int freshCandidateCount, Long freshAvailableCandidateCount,

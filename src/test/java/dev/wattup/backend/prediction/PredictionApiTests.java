@@ -1,6 +1,7 @@
 package dev.wattup.backend.prediction;
 
 import dev.wattup.backend.station.ChargerProfile;
+import dev.wattup.backend.station.PredictionQualityCapture;
 import dev.wattup.backend.station.StationApiAdvice;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.MockMvc;
@@ -8,6 +9,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -22,6 +24,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -37,6 +40,22 @@ class PredictionApiTests {
     private final PredictionService service = new PredictionService(history, routes, ai, Clock.fixed(NOW, ZoneOffset.UTC));
     private final MockMvc http = MockMvcBuilders.standaloneSetup(
             new PredictionController(service)).setControllerAdvice(new StationApiAdvice()).build();
+
+    @Test
+    void doesNotCaptureAResultReceivedAfterTheRequestedArrival() {
+        stationWithHistory();
+        var clock = mock(Clock.class);
+        when(clock.instant()).thenReturn(NOW, NOW, NOW.plusSeconds(601));
+        when(ai.predict(any(), eq(NOW), any())).thenReturn(Optional.of(
+                Map.of("1", new EtaBatchClient.Result("OK", 0.48, "replay-v4"))));
+        var capture = mock(PredictionQualityCapture.class);
+        var serviceWithCapture = new PredictionService(history, routes, ai, clock, Duration.ofSeconds(2), capture);
+
+        var result = serviceWithCapture.predict(List.of(STATION), ChargerProfile.AC_SLOW,
+                new PredictionController.Origin(35.2, 128.3));
+        org.assertj.core.api.Assertions.assertThat(result.items().getFirst().prediction().probability()).isEqualTo(0.48);
+        verifyNoInteractions(capture);
+    }
 
     @Test
     void singlePredictionReturnsActualArrivalAndForecastTime() throws Exception {

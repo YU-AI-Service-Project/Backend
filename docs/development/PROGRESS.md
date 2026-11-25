@@ -109,7 +109,7 @@
 | ETA v4 48번·AI 상태 52번 | AI 팀의 테스트용 FastAPI URL·인증·모델 버전 | 단건과 30건에서 동일 입력의 확률·시각이 일치하고 일부 항목 실패 시 나머지 확률이 유지된다. |
 | 공단 수집·카카오 자동차 ETA·장소 검색 | 팀 승인과 테스트 키·허용 호출량 | 완전한 수집 실행으로 최신 상태와 이력이 갱신되고 실제 경로 ETA와 집계가 응답에 반영된다. |
 | 인증·Android | OAuth 테스트 앱·SMTP·Android 테스트 빌드 | 가입·로그인·갱신·탈퇴 및 앱의 현재 상태·ETA·Top-3를 실제 기기에서 확인한다. |
-| 예측 품질 12번·운영 부하 | 예측과 도착 시점 관측을 연결한 표본, 운영 규모 데이터, 팀이 승인한 부하 시나리오 | 검증 표본의 예측과 관측 결과를 비교하고 단건·배치·추천의 응답 시간과 오류율을 기록한다. |
+| 예측 품질 12번·운영 부하 | 운영 모델의 예측 표본 저장 활성화, 도착 시점 관측, 운영 규모 데이터 | 확률 구간별 관측 비율과 단건·배치·추천의 응답 시간·오류율을 확인한다. |
 
 ## 백엔드 합성 부하 검증
 
@@ -131,6 +131,14 @@
 
 동시 12개에서 배치 예측 80건에 기존 예측 동시 실행 4건 제한이 적용됐다. 추천은 63건에서 일부 또는 전체 확률이 누락됐고, 120건 모두 현재 가용 상태를 반환했다. p50·p95는 HTTP 200 응답으로 계산했다. 각 API를 순차 측정했으며 혼합 트래픽, 운영 이력 규모, 실제 카카오·FastAPI 지연은 별도 검증 대상이다.
 
+## ETA 예측 품질 집계
+
+- Flyway V11의 `eta_prediction_samples`에 응답 형식과 예측 시각이 검증된 ETA 예측의 충전소·프로필·모델 버전·특징 버전·예측 시각·확률·충전기 ID만 저장한다. 요청자 식별자와 출발지 좌표는 저장하지 않는다. 동일 충전소·프로필·모델·특징 버전·예측 격자의 첫 응답을 사용해 중복 집계를 막는다.
+- 기간 내 가장 최근 예측의 모델·특징 버전만 집계한다. 예측 격자부터 5분 미만에 최초로 완료된 지역 전체 수집에서, 저장한 충전기 집합과 현재 공개 집합이 일치하고 각 충전기의 유효 관측이 있어야 한다. 충전기 한 대 이상이 가용이면 해당 표본의 관측값을 가용으로 기록한다.
+- 임시 공개 기준은 짝지은 표본 30개, 한국 시간 기준 3일, 확률 구간당 5개다. 0.2 단위로 구간을 나누고 마지막 구간에 확률 1을 포함한다. 표본이 없으면 `UNVERIFIED_MODEL`, 기준 미달이면 `INSUFFICIENT_EVALUATION`을 반환한다. 비율은 저장한 충전기 집합의 상태 관측으로 계산한다.
+- `WATTUP_PREDICTION_QUALITY_CAPTURE_ENABLED`의 기본값은 `false`다. 도착 예정 시각 전에 검증이 끝난 예측만 저장 대상으로 삼는다. 별도 작업 스레드가 배치 32개까지 대기시킨다. 대기열이 가득 찼거나 DB 쓰기가 실패하면 해당 표본을 건너뛰고 예측 응답은 유지한다. 90일 지난 표본은 매시간 최대 10,000건씩 정리한다. 운영 규모에서 평가 쿼리와 표본 쓰기 비용을 확인한다.
+- Java 25·MySQL 8.4 전체 테스트 96개가 통과했다. 저장을 켠 로컬 혼합 부하에서 중복을 제거한 예측 40건을 저장했고 DB 쓰기 오류는 0건이었다. 동시 12개에서 조회 485건과 추천 365건이 모두 HTTP 200이었다. 배치는 388건 중 200건이 HTTP 200, 188건이 기존 실행 한도에 따른 503이었다. 처리 시간 p95는 HTTP 200 기준 조회 51.24ms, 추천 96.37ms, 배치 133.27ms였다.
+
 ## API 52개 추적표
 
 기존 계약의 분류와 경로를 보존한다. 코드·테스트가 추가될 때 적용 엔드포인트와 증거를 갱신한다.
@@ -148,7 +156,7 @@
 | 9 | `GET /api/locations/reverse-geocode` | 선택 좌표의 주소 표현 | 추가 협의 | G | 구현 · 실연동 대기 | [Controller](../../src/main/java/dev/wattup/backend/location/LocationController.java) · [루프백 HTTP](../../src/test/java/dev/wattup/backend/location/LocationApiTests.java) |
 | 10 | `GET /api/charging-stations/{stationId}/patterns` | 요일·시간대 혼잡 이력 | 확장 | H | 구현 · 표본 기준 적용 | [Controller](../../src/main/java/dev/wattup/backend/station/StationAnalyticsController.java) |
 | 11 | `GET /api/charging-stations/{stationId}/turnover` | 관측 기준 회전율 | 확장 | H | 구현 · 표본 기준 적용 | [Controller](../../src/main/java/dev/wattup/backend/station/StationAnalyticsController.java) |
-| 12 | `GET /api/charging-stations/{stationId}/prediction-quality` | 예측과 관측 결과 비교 | 확장 | H | 미검증 상태 응답 구현 · 평가 데이터 대기 | [Controller](../../src/main/java/dev/wattup/backend/station/StationAnalyticsController.java) |
+| 12 | `GET /api/charging-stations/{stationId}/prediction-quality` | 예측과 관측 결과 비교 | 확장 | H | 집계 구현 · 운영 평가 표본 대기 | [Controller](../../src/main/java/dev/wattup/backend/station/StationAnalyticsController.java) · [MySQL](../../src/test/java/dev/wattup/backend/station/StationAnalyticsDatabaseTests.java) |
 | 13 | `GET /api/areas/charging-availability` | 주변 충전 여건 요약 | 확장 | H | 구현 · FastAPI 실연동 대기 | [Controller](../../src/main/java/dev/wattup/backend/station/StationAnalyticsController.java) |
 | 14 | `GET /api/auth/agreements` | 가입에 필요한 약관·버전 안내 | 계정 협의 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
 | 15 | `POST /api/auth/social/kakao` | 카카오 토큰 검증·기존 로그인/신규 가입 안내 | 계정 협의 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |

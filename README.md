@@ -147,7 +147,9 @@ Spring Boot는 수집이 완료된 MySQL 이력으로 30분 특징을 만들고,
 
 ## 분석·공지·신고
 
-- 충전소 분석은 완전한 지역 수집의 관측을 사용한다. 관측이 부족하면 `INSUFFICIENT_HISTORY`, 운영 평가가 준비되지 않은 예측 품질에는 `UNVERIFIED_MODEL`을 반환한다.
+- 충전소 분석은 완전한 지역 수집의 관측을 사용한다. 관측이 부족하면 `INSUFFICIENT_HISTORY`를 반환한다.
+- `GET /api/charging-stations/{stationId}/prediction-quality`는 최신 모델·특징 버전의 병합 가능한 표본을 비교한다. 검증 가능한 표본이 없으면 `UNVERIFIED_MODEL`, 표본이 30개 또는 한국 시간 기준 3일에 못 미치면 `INSUFFICIENT_EVALUATION`을 반환한다. 조건을 충족하면 표본이 5개 이상인 확률 구간별 관측 가용 비율을 제공한다.
+- `WATTUP_PREDICTION_QUALITY_CAPTURE_ENABLED=true`로 표본 저장과 90일 보관 정리를 활성화한다. 기본값은 `false`다. 도착 예정 시각 전에 검증이 끝난 응답을 별도 저장 작업으로 넘긴다. 같은 충전소·프로필·모델·특징 버전·5분 예측 격자에는 처음 저장된 응답을 사용한다. 관측은 예측 격자부터 5분 미만에 완료된 지역 전체 수집 중 같은 충전기 집합의 상태가 모두 확인된 경우에 사용한다.
 - `GET /api/areas/charging-availability`는 가까운 후보 최대 30곳의 현재 관측 및 ETA 예측 집계를 제공한다. 0.75 이상인 유효 예측 수와 예측이 실제로 제공된 후보 수를 표시한다.
 - `GET /api/app/notices`는 활성 상태이며 게시 기간인 공지 목록을 반환한다. `POST /api/support/reports`는 JWT 인증이 필요하며 `STATION_INFORMATION`, `APP_ERROR`, `OTHER` 유형을 받는다. 계정당 한 시간에 최대 5회 요청할 수 있다.
 
