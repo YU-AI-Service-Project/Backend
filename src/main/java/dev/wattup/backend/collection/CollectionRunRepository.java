@@ -75,6 +75,50 @@ final class CollectionRunRepository {
         return Objects.requireNonNull(key.getKey()).longValue();
     }
 
+    long enqueue(KecoEndpoint endpoint, String region, String reason, LocalDateTime requestedAt) {
+        var key = new GeneratedKeyHolder();
+        jdbc.update(connection -> {
+            var statement = connection.prepareStatement("""
+                    INSERT INTO collection_runs (run_type, status, region_code, started_at, manual_requested_at, manual_reason)
+                    VALUES (?, 'QUEUED', ?, ?, ?, ?)
+                    """, Statement.RETURN_GENERATED_KEYS);
+            statement.setString(1, endpoint.runType);
+            statement.setString(2, region);
+            statement.setObject(3, requestedAt);
+            statement.setObject(4, requestedAt);
+            statement.setString(5, reason);
+            return statement;
+        }, key);
+        return Objects.requireNonNull(key.getKey()).longValue();
+    }
+
+    boolean requestedSince(String region, LocalDateTime cutoff) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS(SELECT 1 FROM collection_runs WHERE region_code=? AND manual_requested_at>?)
+                """, Boolean.class, region, cutoff));
+    }
+
+    Optional<Queued> nextQueued(String region) {
+        return jdbc.query("""
+                SELECT run_id, run_type FROM collection_runs WHERE region_code=? AND status='QUEUED'
+                AND run_type IN ('STATUS_FULL','STATUS_DELTA')
+                ORDER BY run_id LIMIT 1
+                """, (rs, i) -> new Queued(rs.getLong(1),
+                rs.getString(2).equals("STATUS_FULL") ? KecoEndpoint.FULL_INVENTORY : KecoEndpoint.CHANGED_STATUS), region)
+                .stream().findFirst();
+    }
+
+    boolean claim(Queued queued, String region, LocalDateTime startedAt) {
+        boolean delta = queued.endpoint == KecoEndpoint.CHANGED_STATUS;
+        return jdbc.update("""
+                UPDATE collection_runs SET status='RUNNING', started_at=?, window_from=?, window_to=?
+                WHERE run_id=? AND region_code=? AND status='QUEUED'
+                """, startedAt, delta ? startedAt.minusMinutes(10) : null, delta ? startedAt : null,
+                queued.id, region) == 1;
+    }
+
+    record Queued(long id, KecoEndpoint endpoint) {}
+
     boolean reserveRequest(LocalDate seoulDay, int limit) {
         jdbc.update("""
                 INSERT INTO keco_daily_requests (request_date) VALUES (?) AS incoming

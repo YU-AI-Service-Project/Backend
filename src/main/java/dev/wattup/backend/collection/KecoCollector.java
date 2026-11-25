@@ -40,13 +40,21 @@ final class KecoCollector {
     }
 
     Optional<Long> collect(KecoEndpoint endpoint) {
-        return runs.withCollectionLock(() -> runCollection(endpoint));
+        return runs.withCollectionLock(() -> runCollection(endpoint, null));
     }
 
-    private long runCollection(KecoEndpoint endpoint) {
+    void collectQueued() {
+        runs.nextQueued(settings.region()).ifPresent(queued -> runs.withCollectionLock(() ->
+                runCollection(queued.endpoint(), queued)));
+    }
+
+    private long runCollection(KecoEndpoint endpoint, CollectionRunRepository.Queued queued) {
         LocalDateTime startedAt = utcNow();
         runs.closeInterruptedRuns(startedAt);
-        long runId = runs.start(endpoint, settings.region(), startedAt);
+        if (queued != null && !runs.claim(queued, settings.region(), startedAt)) {
+            return queued.id();
+        }
+        long runId = queued == null ? runs.start(endpoint, settings.region(), startedAt) : queued.id();
         var batch = new Batch(settings.pageSize());
         try {
             fetchPages(runId, endpoint, batch);

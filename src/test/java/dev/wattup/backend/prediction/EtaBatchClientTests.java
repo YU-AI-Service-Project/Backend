@@ -60,17 +60,33 @@ class EtaBatchClientTests {
                 exchange.getResponseBody().write(result);
             }
         });
+        server.createContext("/health", exchange -> {
+            try (exchange) {
+                byte[] body = "{\"status\":\"UP\"}".getBytes(StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(200, body.length);
+                exchange.getResponseBody().write(body);
+            }
+        });
         server.start();
         try {
             var endpoint = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/internal/test-arrivals");
-            var client = new EtaBatchClient(HttpClient.newHttpClient(), json, endpoint, "test-token", Duration.ofSeconds(2));
-            var results = client.predict("batch", Instant.parse("2026-11-12T01:00:00Z"), List.of(
-                    item("1", "KECO:A"), item("2", "KECO:B"), item("3", "KECO:C"))).orElseThrow();
-            assertThat(calls.get()).isEqualTo(2);
-            assertThat(results).containsOnlyKeys("1", "2");
-            assertThat(results.get("1").probability()).isZero();
-            assertThat(results.get("2").probability()).isNull();
-            assertThat(results.get("2").status()).isEqualTo("INPUT_INCOMPLETE");
+            try (var http = HttpClient.newHttpClient()) {
+                var client = new EtaBatchClient(http, json, endpoint, "test-token", Duration.ofSeconds(2));
+                var health = new PredictionHealthController(json, client, endpoint.resolve("/health"), "", http);
+                assertThat(health.health().status()).isEqualTo("DEGRADED");
+                var results = client.predict("batch", Instant.parse("2026-11-12T01:00:00Z"), List.of(
+                        item("1", "KECO:A"), item("2", "KECO:B"), item("3", "KECO:C"))).orElseThrow();
+                assertThat(calls.get()).isEqualTo(2);
+                assertThat(results).containsOnlyKeys("1", "2");
+                assertThat(results.get("1").probability()).isZero();
+                assertThat(results.get("2").probability()).isNull();
+                assertThat(results.get("2").status()).isEqualTo("INPUT_INCOMPLETE");
+                var state = health.health();
+                assertThat(state.status()).isEqualTo("HEALTHY");
+                assertThat(state.modelVersion()).isEqualTo("test-model");
+                assertThat(state.lastSuccessAt()).isNotNull();
+                assertThat(state.latencyMs()).isNotNegative();
+            }
         } finally {
             server.stop(0);
         }

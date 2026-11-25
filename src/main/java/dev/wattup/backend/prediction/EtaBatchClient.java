@@ -23,6 +23,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -39,6 +40,7 @@ final class EtaBatchClient {
     private final String token;
     private final Duration timeout;
     private final Semaphore concurrentCalls = new Semaphore(4);
+    private final AtomicReference<Activity> activity = new AtomicReference<>(new Activity(null, "NOT_ATTEMPTED", null, null, null));
 
     EtaBatchClient(HttpClient http, JsonMapper json, URI endpoint, String token, Duration timeout) {
         this.http = http;
@@ -52,6 +54,9 @@ final class EtaBatchClient {
         if (endpoint == null || items.isEmpty() || items.size() > MAX_ITEMS || !concurrentCalls.tryAcquire()) {
             return Optional.empty();
         }
+        long started = System.nanoTime();
+        String model = null;
+        String state = "FAILED";
         try {
             var body = new Batch(requestId, requestAt, FEATURE_VERSION, items);
             var request = HttpRequest.newBuilder(endpoint).header("Content-Type", "application/json")
@@ -69,12 +74,36 @@ final class EtaBatchClient {
                     || root.path("items").size() > MAX_ITEMS) {
                 return Optional.empty();
             }
-            return Optional.of(parseItems(root.path("items"), items, requestAt));
+            var results = parseItems(root.path("items"), items, requestAt);
+            model = results.values().stream().filter(result -> "OK".equals(result.status))
+                    .map(Result::modelVersion).sorted().findFirst().orElse(null);
+            state = results.isEmpty() ? "FAILED" : model == null ? "NO_RESULT" : "SUCCEEDED";
+            return Optional.of(results);
         } catch (JacksonException e) {
             return Optional.empty();
         } finally {
+            recordActivity(state, model, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started));
             concurrentCalls.release();
         }
+    }
+
+    boolean configured() {
+        return endpoint != null;
+    }
+
+    Activity activity() {
+        return activity.get();
+    }
+
+    private void recordActivity(String state, String model, long latency) {
+        Instant finishedAt = Instant.now();
+        activity.updateAndGet(previous -> {
+            if (previous.lastAttemptAt != null && previous.lastAttemptAt.isAfter(finishedAt)) {
+                return previous;
+            }
+            return new Activity(finishedAt, state, model == null ? previous.lastSuccessAt : finishedAt,
+                    model == null ? previous.modelVersion : model, model == null ? previous.latencyMs : Long.valueOf(latency));
+        });
     }
 
     private HttpResponse<String> send(HttpRequest request) {
@@ -160,6 +189,10 @@ final class EtaBatchClient {
     }
 
     record Result(String status, Double probability, String modelVersion) {
+    }
+
+    record Activity(Instant lastAttemptAt, String lastRequestStatus, Instant lastSuccessAt, String modelVersion,
+                    Long latencyMs) {
     }
 
     private record Batch(String requestId, Instant requestAt, String featureVersion, List<Item> items) {

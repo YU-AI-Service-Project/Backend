@@ -8,11 +8,13 @@ final class KecoCollectionSchedule {
     private final KecoCollector collector;
     private final CollectionRunRepository runs;
     private final String region;
+    private final boolean manualEnabled;
 
-    KecoCollectionSchedule(KecoCollector collector, CollectionRunRepository runs, String region) {
+    KecoCollectionSchedule(KecoCollector collector, CollectionRunRepository runs, String region, boolean manualEnabled) {
         this.collector = collector;
         this.runs = runs;
         this.region = region;
+        this.manualEnabled = manualEnabled;
     }
 
     @Scheduled(initialDelay = 0, fixedDelay = 1, timeUnit = TimeUnit.HOURS)
@@ -24,6 +26,13 @@ final class KecoCollectionSchedule {
     void refreshChangedStatuses() {
         if (runs.hasFullSnapshot(region)) {
             collector.collect(KecoEndpoint.CHANGED_STATUS);
+        }
+    }
+
+    @Scheduled(fixedDelay = 5, timeUnit = TimeUnit.SECONDS)
+    void runManualRequests() {
+        if (manualEnabled) {
+            collector.collectQueued();
         }
     }
 }

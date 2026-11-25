@@ -10,8 +10,9 @@
 - 완료 범주 D · 서버 Top-3 추천과 Android용 통합 응답. PR [#6](https://github.com/YU-AI-Service-Project/Backend/pull/6)을 `a3fcb9c`로 Squash Merge했다.
 - 완료 범주 E · 소셜 로그인, 약관, 토큰·세션, 이메일 가입·비밀번호 API 14개. PR [#7](https://github.com/YU-AI-Service-Project/Backend/pull/7)을 `a245d73`으로 Squash Merge했다.
 - 완료 범주 F · 내 계정·탈퇴 API 11개. PR [#8](https://github.com/YU-AI-Service-Project/Backend/pull/8)을 `22b72f5`로 Squash Merge했다.
-- 현재 범주 G · `feat/personalization`. 즐겨찾기·검색 설정·장소 주소 조회 API 8개를 구현했다. [GitHub PR 검색](https://github.com/YU-AI-Service-Project/Backend/pulls?q=is%3Apr+head%3Afeat%2Fpersonalization)
-- 범주 A는 수집 내부 서비스에 집중한다. 관리자 HTTP 49–51은 인증·운영 정책과 함께 H에서 제공한다. 공단 실연동은 인증키와 실호출 승인 후 검증한다.
+- 완료 범주 G · 즐겨찾기·검색 설정·장소 주소 조회 API 8개. PR [#9](https://github.com/YU-AI-Service-Project/Backend/pull/9)을 `2d8d212`로 Squash Merge했다.
+- 현재 범주 H · `feat/remaining-apis`. 분석·공지·신고·내부 운영 API와 OpenAPI를 제공한다. [GitHub PR 검색](https://github.com/YU-AI-Service-Project/Backend/pulls?q=is%3Apr+head%3Afeat%2Fremaining-apis)
+- 범주 A의 수집 내부 서비스는 H의 관리자 HTTP 49–51에서 재사용한다. 공단 실연동은 인증키와 실호출 승인 후 검증한다.
 - FastAPI 추론 경로 47·48의 소유자는 AI 서버다. Spring Boot는 계약 및 호출 클라이언트를 담당한다. 52번 AI 연결 상태는 Spring Boot 소유다.
 - 각 범주의 CI와 병합 상태는 해당 PR을 기준으로 기록한다.
 
@@ -73,7 +74,17 @@
 - 화면 명세서의 수동 위치 검색에서 필요한 도로명·지번·장소명을 제공한다. 지도 표시·터치·GPS 기준점 이동은 Android의 지도 기능을 사용한다. 주소를 찾을 수 없거나 로컬 API가 실패하면 역지오코딩은 원래 위치를 반환한다. [카카오 로컬 REST API](https://developers.kakao.com/docs/ko/local/dev-guide)
 - HTTP/MySQL에서 사용자 격리, 중복·반복 가져오기, 비공개 충전소, 페이지, 설정의 부분 수정과 프로필 호환을 검증한다. 카카오 계약과 실패 처리는 루프백에서 검증한다. 실제 카카오 로컬 키와 Android 화면 연동은 운영 검증 대상이다.
 - Java 25·MySQL 8.4에서 `mvnw.cmd clean verify` 전체 75개 통과, 실패·건너뜀 0개. 서로 다른 설정 필드의 동시 수정도 확인했다.
-- 다음 범주는 H의 분석·공지·신고·내부 운영 API와 52개 최종 대조다.
+- [PR CI](https://github.com/YU-AI-Service-Project/Backend/actions/runs/45525101965)에서 자동 검증을 확인했다.
+
+## 범주 H 검증과 인계
+
+- 원본 API 명세의 52개 Method·URI를 아래 표와 대조했다. Spring Boot 소유 50개는 실행 중인 앱의 OpenAPI와 비교한다. 47·48번 FastAPI 경로는 AI 배포와 별도로 검증한다.
+- Java 25·MySQL 8.4에서 `mvnw.cmd clean verify` 전체 91개 통과, 실패·건너뜀 0개. 실제 HTTP 앱에서 Swagger UI, 50개 경로, 운영 인증을 검증했고 루프백 및 MySQL에서 신고·수집·AI 상태 응답을 확인했다.
+- 요일·시간대 패턴은 현지 날짜 3개 이상의 완전한 지역 상태 수집 표본을 사용한다. 회전율은 관측 간격 75분 이하의 구간을 합산하며, 관측 시간 24시간과 현지 날짜 2일이 필요하다. 12번은 운영 예측과 실제 도착 시점 상태를 연결한 표본이 확보될 때까지 `UNVERIFIED_MODEL`을 반환한다.
+- 지역 요약에서는 가장 가까운 최대 30개 충전소를 평가한다. 현재 상태를 확인한 후보 수와 유효한 ETA 예측을 받은 후보 수를 따로 집계한다. 높은 가용성 기준 0.75는 검토용이며 응답에 포함한다.
+- Flyway V9는 공지와 신고, V10은 수동 수집 요청을 추가한다. 신고에는 JWT가 필요하며 접수 정보는 회원 탈퇴 시 삭제한다. 공지 작성 권한, 신고 열람·보관 절차 및 비회원 접수 정책은 운영 전에 확정한다.
+- 내부 경로는 기본적으로 루프백 연결과 별도의 Bearer 토큰을 요구한다. 수동 수집은 쓰기 토큰과 활성화 설정이 필요하다. 역방향 프록시의 접근 통제와 FastAPI 상태 응답 계약은 배포 환경에서 확인한다.
+- 실제 공단·카카오·FastAPI 호출, SMTP, Android 실기기, 운영 데이터 규모의 부하 검증은 배포 환경을 확보한 후 진행한다.
 
 ## API 52개 추적표
 
@@ -90,10 +101,10 @@
 | 7 | `GET /api/recommendations` | 최대 3곳 추천·추천 근거 | 핵심 | D | 구현 · 순위 기준 검토 중 | [Controller](../../src/main/java/dev/wattup/backend/station/RecommendationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/station/ChargingStationApiTests.java) |
 | 8 | `GET /api/locations/search` | 카카오 장소·주소 검색 프록시 | 추가 협의 | G | 구현 · 실연동 대기 | [Controller](../../src/main/java/dev/wattup/backend/location/LocationController.java) · [루프백 HTTP](../../src/test/java/dev/wattup/backend/location/LocationApiTests.java) |
 | 9 | `GET /api/locations/reverse-geocode` | 선택 좌표의 주소 표현 | 추가 협의 | G | 구현 · 실연동 대기 | [Controller](../../src/main/java/dev/wattup/backend/location/LocationController.java) · [루프백 HTTP](../../src/test/java/dev/wattup/backend/location/LocationApiTests.java) |
-| 10 | `GET /api/charging-stations/{stationId}/patterns` | 요일·시간대 혼잡 이력 | 확장 | H | 미구현 | — |
-| 11 | `GET /api/charging-stations/{stationId}/turnover` | 관측 기준 회전율 | 확장 | H | 미구현 | — |
-| 12 | `GET /api/charging-stations/{stationId}/prediction-quality` | 예측과 관측 결과 비교 | 확장 | H | 미구현 | — |
-| 13 | `GET /api/areas/charging-availability` | 주변 충전 여건 요약 | 확장 | H | 미구현 | — |
+| 10 | `GET /api/charging-stations/{stationId}/patterns` | 요일·시간대 혼잡 이력 | 확장 | H | 구현 · 표본 기준 적용 | [Controller](../../src/main/java/dev/wattup/backend/station/StationAnalyticsController.java) |
+| 11 | `GET /api/charging-stations/{stationId}/turnover` | 관측 기준 회전율 | 확장 | H | 구현 · 표본 기준 적용 | [Controller](../../src/main/java/dev/wattup/backend/station/StationAnalyticsController.java) |
+| 12 | `GET /api/charging-stations/{stationId}/prediction-quality` | 예측과 관측 결과 비교 | 확장 | H | 미검증 상태 응답 구현 · 평가 데이터 대기 | [Controller](../../src/main/java/dev/wattup/backend/station/StationAnalyticsController.java) |
+| 13 | `GET /api/areas/charging-availability` | 주변 충전 여건 요약 | 확장 | H | 구현 · FastAPI 실연동 대기 | [Controller](../../src/main/java/dev/wattup/backend/station/StationAnalyticsController.java) |
 | 14 | `GET /api/auth/agreements` | 가입에 필요한 약관·버전 안내 | 계정 협의 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
 | 15 | `POST /api/auth/social/kakao` | 카카오 토큰 검증·기존 로그인/신규 가입 안내 | 계정 협의 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
 | 16 | `POST /api/auth/social/google` | Google ID 토큰 검증·기존 로그인/신규 가입 안내 | 계정 협의 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
@@ -125,11 +136,11 @@
 | 42 | `POST /api/users/me/favorites/import` | 비회원 로컬 즐겨찾기 계정 이전(선택) | 계정 협의 | G | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/PersonalizationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
 | 43 | `GET /api/users/me/preferences` | 저장된 검색 조건 조회 | 계정 협의 | G | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/PersonalizationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
 | 44 | `PATCH /api/users/me/preferences` | 검색 반경·기본 충전기 조건 변경 | 계정 협의 | G | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/PersonalizationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
-| 45 | `GET /api/app/notices` | 점검·장애 안내 | 추가 협의 | H | 미구현 | — |
-| 46 | `POST /api/support/reports` | 이용 오류·정보 오류 신고 | 추가 협의 | H | 미구현 | — |
+| 45 | `GET /api/app/notices` | 점검·장애 안내 | 추가 협의 | H | 구현 · 공지 운영 절차 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AppSupportController.java) |
+| 46 | `POST /api/support/reports` | 이용 오류·정보 오류 신고 | 추가 협의 | H | JWT 신고 구현 · 비회원 정책 보류 | [Controller](../../src/main/java/dev/wattup/backend/auth/AppSupportController.java) |
 | 47 | `POST /internal/ai/predictions/fixed30/batch` | Spring Boot → AI 고정 30분 예측(HTTP 어댑터 제안) | 내부 | H | FastAPI 담당 | AI 팀 HTTP 계약 대기 |
 | 48 | `POST /internal/ai/predictions/arrival/batch` | Spring Boot → AI ETA v4 배치 예측(기존 협업 규격) | 내부/확장 | C | Spring Boot 클라이언트 구현 · FastAPI 실연동 대기 | [클라이언트](../../src/main/java/dev/wattup/backend/prediction/EtaBatchClient.java) · [계약 테스트](../../src/test/java/dev/wattup/backend/prediction/EtaBatchClientTests.java) |
-| 49 | `GET /internal/collector/health` | 상태 수집기 최근 성공·실패 현황 | 내부 | H | 미구현 | — |
-| 50 | `GET /internal/collector/runs` | 수집 실행 이력 | 내부 | H | 미구현 | — |
-| 51 | `POST /internal/collector/runs` | 관리자 수동 동기화 요청(선택) | 내부 | H | 미구현 | — |
-| 52 | `GET /internal/ai/health` | AI 서버 연동 상태 | 내부 | H | 미구현 | — |
+| 49 | `GET /internal/collector/health` | 상태 수집기 최근 성공·실패 현황 | 내부 | H | 구현 · 내부 배포 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/collection/CollectorOperationsController.java) |
+| 50 | `GET /internal/collector/runs` | 수집 실행 이력 | 내부 | H | 구현 | [Controller](../../src/main/java/dev/wattup/backend/collection/CollectorOperationsController.java) |
+| 51 | `POST /internal/collector/runs` | 관리자 수동 동기화 요청(선택) | 내부 | H | 구현 · 기본 비활성 | [Controller](../../src/main/java/dev/wattup/backend/collection/CollectorOperationsController.java) |
+| 52 | `GET /internal/ai/health` | AI 서버 연동 상태 | 내부 | H | 구현 · FastAPI 실연동 대기 | [Controller](../../src/main/java/dev/wattup/backend/prediction/PredictionHealthController.java) |

@@ -25,7 +25,8 @@ class AuthSecurity {
             response.setHeader("WWW-Authenticate", "Bearer");
             json.writeValue(response.getOutputStream(), new AuthFailure(401, "AUTHENTICATION_REQUIRED").response());
         };
-        return http.securityMatcher("/api/users/me", "/api/users/me/**", "/api/auth/logout", "/api/auth/logout-all")
+        return http.securityMatcher("/api/users/me", "/api/users/me/**", "/api/auth/logout", "/api/auth/logout-all",
+                        "/api/support/reports")
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .requestCache(AbstractHttpConfigurer::disable)
                 .csrf(AbstractHttpConfigurer::disable)

@@ -1,0 +1,31 @@
+CREATE TABLE app_notices (
+  notice_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  title VARCHAR(200) NOT NULL,
+  content TEXT NOT NULL,
+  severity ENUM('INFO','WARNING','CRITICAL') NOT NULL DEFAULT 'INFO',
+  is_active BOOLEAN NOT NULL DEFAULT FALSE,
+  published_at DATETIME(3) NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+    ON UPDATE CURRENT_TIMESTAMP(3),
+  KEY idx_notices_publication (is_active, published_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE support_reports (
+  report_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id BIGINT UNSIGNED NULL,
+  station_id VARCHAR(90) NULL,
+  category ENUM('STATION_INFORMATION','APP_ERROR','OTHER') NOT NULL,
+  message TEXT NOT NULL,
+  contact_email VARCHAR(320) NULL,
+  status ENUM('RECEIVED','IN_REVIEW','RESOLVED','REJECTED') NOT NULL DEFAULT 'RECEIVED',
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+    ON UPDATE CURRENT_TIMESTAMP(3),
+  KEY idx_reports_status_time (status, created_at),
+  KEY idx_reports_station (station_id),
+  CONSTRAINT fk_report_user FOREIGN KEY (user_id)
+    REFERENCES users(user_id) ON DELETE CASCADE,
+  CONSTRAINT fk_report_station FOREIGN KEY (station_id)
+    REFERENCES charging_stations(station_id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
