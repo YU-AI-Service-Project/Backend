@@ -140,7 +140,7 @@ class SocialIdentityVerifier {
         return value == null || value.isBlank() || value.length() > limit ? null : value;
     }
 
-    private static RestTemplate client() {
+    static RestTemplate client() {
         var requests = new SimpleClientHttpRequestFactory();
         requests.setConnectTimeout(Duration.ofSeconds(2));
         requests.setReadTimeout(Duration.ofSeconds(3));

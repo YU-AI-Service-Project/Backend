@@ -12,6 +12,8 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -24,11 +26,18 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @EnabledIfEnvironmentVariable(named = "WATTUP_TEST_DB_URL", matches = ".+")
@@ -59,7 +68,7 @@ class AuthApiTests {
         application = new SpringApplicationBuilder(WattUpApplication.class, Stubs.class).run(
                 "--spring.datasource.url=" + url, "--wattup.collection.enabled=false",
                 "--server.port=0", "--server.address=127.0.0.1", "--wattup.auth.jwt-secret=" + testKey,
-                "--wattup.auth.email-secret=" + testKey);
+                "--wattup.auth.email-secret=" + testKey, "--wattup.account.withdrawal-enabled=true");
         db = application.getBean(JdbcTemplate.class);
         port = application.getEnvironment().getRequiredProperty("local.server.port", Integer.class);
         for (String type : List.of("TERMS", "PRIVACY")) {
@@ -247,6 +256,236 @@ class AuthApiTests {
                 "REFRESH_TOKEN_EXPIRED");
     }
 
+    @Test
+    void updatesProfileAndUsesOnlyTheAuthenticatedSessionForSessionManagement() throws Exception {
+        var member = account("profile");
+        var foreign = account("foreign");
+        var other = application.getBean(AuthSessions.class).start(member.id, "อีก기기");
+        String access = member.tokens.accessToken();
+        send("GET", "/api/users/me", null, null, 401);
+        assertThat(send("GET", "/api/users/me", null, access, 200).path("userId").asLong()).isEqualTo(member.id);
+        assertCode(send("PATCH", "/api/users/me", Map.of("nickname", "<bad>"), access, 400), "INVALID_NICKNAME");
+        assertCode(send("PATCH", "/api/users/me", Map.of("nickname", fixture + "New",
+                "profileImageUrl", "https://example.test/invalid"), access, 400), "INVALID_REQUEST");
+        assertThat(send("PATCH", "/api/users/me", Map.of("nickname", fixture + "New"), access, 200)
+                .path("nickname").asText()).isEqualTo(fixture + "New");
+        var items = send("GET", "/api/users/me/sessions", null, access, 200).path("items");
+        assertThat(items.size()).isEqualTo(2);
+        assertThat(items.toString()).doesNotContain(other.refreshToken(), member.tokens.refreshToken());
+        String foreignFamily = sessionId(foreign.tokens);
+        send("DELETE", "/api/users/me/sessions/" + foreignFamily, null, access, 404);
+        send("DELETE", "/api/users/me/sessions/" + sessionId(other), null, access, 204);
+        send("GET", "/api/users/me", null, other.accessToken(), 401);
+        send("GET", "/api/users/me", null, access, 200);
+        send("GET", "/api/users/me", null, foreign.tokens.accessToken(), 200);
+    }
+
+    @Test
+    void recordsOptionalConsentAndRequiresPurposeAccountAndSessionBoundTickets() throws Exception {
+        var member = account("linked");
+        var foreign = account("other");
+        var sibling = application.getBean(AuthSessions.class).start(member.id, null);
+        String access = member.tokens.accessToken();
+        db.update("""
+                INSERT INTO agreement_policies (policy_type,policy_version,title,is_required,is_current,published_at)
+                VALUES ('OPTIONAL_MARKETING',?,'Synthetic optional policy',FALSE,TRUE,UTC_TIMESTAMP(3))
+                """, fixture);
+        try {
+            assertCode(send("PATCH", "/api/users/me/agreements", Map.of("type", "TERMS", "agreed", false),
+                    access, 400), "INVALID_REQUEST");
+            for (boolean agreed : new boolean[]{true, false}) {
+                assertThat(send("PATCH", "/api/users/me/agreements", Map.of("type", "OPTIONAL_MARKETING", "agreed", agreed),
+                        access, 200).path("agreed").asBoolean()).isEqualTo(agreed);
+            }
+            var decisions = send("GET", "/api/users/me/agreements", null, access, 200).path("items");
+            assertThat(decisions.size()).isEqualTo(2);
+            assertThat(decisions.get(0).path("agreed").asBoolean()).isFalse();
+        } finally {
+            db.update("DELETE FROM agreement_policies WHERE policy_type='OPTIONAL_MARKETING' AND policy_version=?", fixture);
+        }
+        var stub = application.getBean("stubVerifier", SocialIdentityVerifier.class);
+        when(stub.verify("KAKAO", "account-link")).thenReturn(new SocialIdentityVerifier.Identity(
+                "KAKAO", fixture + "link", address("linked-provider"), null, null));
+        String expired = reauth(access, "LINK_SOCIAL");
+        db.update("""
+                UPDATE auth_action_tickets SET issued_at=UTC_TIMESTAMP(3)-INTERVAL 10 MINUTE,
+                    expires_at=UTC_TIMESTAMP(3)-INTERVAL 5 MINUTE WHERE ticket_hash=?
+                """, AuthValues.hash(expired));
+        assertCode(send("POST", "/api/users/me/social-accounts/kakao",
+                Map.of("providerAccessToken", "account-link", "reauthenticationToken", expired), access, 410),
+                "REAUTHENTICATION_EXPIRED");
+        String link = reauth(access, "LINK_SOCIAL");
+        var linkBody = Map.of("providerAccessToken", "account-link", "reauthenticationToken", link);
+        send("POST", "/api/users/me/social-accounts/kakao", linkBody, sibling.accessToken(), 403);
+        send("POST", "/api/users/me/social-accounts/kakao", linkBody, foreign.tokens.accessToken(), 403);
+        send("DELETE", "/api/users/me/social-accounts/kakao", Map.of("reauthenticationToken", link), access, 403);
+        var linked = send("POST", "/api/users/me/social-accounts/kakao", linkBody, access, 201).path("items");
+        assertThat(linked.get(0).path("provider").asText()).isEqualTo("KAKAO");
+        assertThat(linked.get(0).has("providerUserId")).isFalse();
+        send("POST", "/api/users/me/social-accounts/kakao", linkBody, access, 403);
+        var conflict = Map.of("providerAccessToken", "account-link", "reauthenticationToken",
+                reauth(foreign.tokens.accessToken(), "LINK_SOCIAL"));
+        assertCode(send("POST", "/api/users/me/social-accounts/kakao", conflict, foreign.tokens.accessToken(), 409),
+                "ACCOUNT_LINK_CONFLICT");
+
+        db.update("DELETE FROM user_email_credentials WHERE user_id=?", member.id);
+        String unlink = send("POST", "/api/users/me/reauthentication", Map.of("purpose", "UNLINK_SOCIAL", "method", "KAKAO",
+                "providerAccessToken", "account-link"), access, 200).path("reauthenticationToken").asText();
+        assertCode(send("DELETE", "/api/users/me/social-accounts/kakao", Map.of("reauthenticationToken", unlink),
+                access, 409), "LAST_LOGIN_METHOD");
+        var disconnect = application.getBean("stubDisconnect", KakaoDisconnect.class);
+        verify(disconnect, never()).unlink(fixture + "link");
+        addPassword(member.id, address("linked"));
+        doThrow(new AuthFailure(502, "UPSTREAM_UNAVAILABLE")).doNothing().when(disconnect).unlink(fixture + "link");
+        send("DELETE", "/api/users/me/social-accounts/kakao", Map.of("reauthenticationToken", unlink), access, 502);
+        assertThat(send("GET", "/api/users/me/social-accounts", null, access, 200).path("items").size()).isEqualTo(1);
+        send("DELETE", "/api/users/me/social-accounts/kakao", Map.of("reauthenticationToken", unlink), access, 204);
+        assertThat(send("GET", "/api/users/me/social-accounts", null, access, 200).path("items").size()).isZero();
+        send("GET", "/api/users/me", null, sibling.accessToken(), 401);
+    }
+
+    @Test
+    void withdrawalPurgesPersonalDataAndPreventsOldTicketsFromReopeningTheAccount() throws Exception {
+        var member = account("withdrawn");
+        String access = member.tokens.accessToken();
+        var other = application.getBean(AuthSessions.class).start(member.id, "Second device");
+        var provider = application.getBean("stubVerifier", SocialIdentityVerifier.class);
+        when(provider.verify("GOOGLE", "withdraw-identity")).thenReturn(new SocialIdentityVerifier.Identity(
+                "GOOGLE", fixture + "withdraw", address("withdrawn"), null, null));
+        String oldSignup = send("POST", "/api/auth/social/google", Map.of("idToken", "withdraw-identity"), null, 202)
+                .path("registrationToken").asText();
+        send("POST", "/api/users/me/social-accounts/google",
+                Map.of("idToken", "withdraw-identity", "reauthenticationToken", reauth(access, "LINK_SOCIAL")), access, 201);
+        String pendingDuringWithdrawal = application.getBean(AuthAccounts.class).ticket("SOCIAL_SIGNUP", null,
+                address("withdrawn"), "GOOGLE", fixture + "withdraw", null, Duration.ofMinutes(10));
+        String stationId = "KECO:" + fixture;
+        db.update("INSERT INTO charging_stations (station_id,source_station_id,station_name) VALUES (?,?,'Fixture')",
+                stationId, fixture);
+        try {
+            db.update("INSERT INTO user_preferences (user_id) VALUES (?)", member.id);
+            db.update("INSERT INTO user_favorites (user_id,station_id) VALUES (?,?)", member.id, stationId);
+            var confirmation = Map.of("confirmation", "WITHDRAW", "reauthenticationToken", reauth(access, "WITHDRAW"));
+            send("DELETE", "/api/users/me", confirmation, other.accessToken(), 403);
+            send("DELETE", "/api/users/me", confirmation, access, 204);
+            send("GET", "/api/users/me", null, access, 401);
+            send("GET", "/api/users/me", null, other.accessToken(), 401);
+            send("POST", "/api/auth/refresh", Map.of("refreshToken", other.refreshToken()), null, 401);
+            send("POST", "/api/auth/social/signup",
+                    Map.of("registrationToken", oldSignup, "nickname", fixture + "Re", "agreements", consents), null, 410);
+            send("POST", "/api/auth/social/signup",
+                    Map.of("registrationToken", pendingDuringWithdrawal, "nickname", fixture + "Re", "agreements", consents),
+                    null, 410);
+            send("POST", "/api/auth/social/google", Map.of("idToken", "withdraw-identity"), null, 202);
+            assertThat(db.queryForObject("SELECT account_status FROM users WHERE user_id=?", String.class, member.id))
+                    .isEqualTo("WITHDRAWN");
+            assertThat(db.queryForObject("SELECT nickname FROM users WHERE user_id=?", String.class, member.id))
+                    .doesNotContain(fixture);
+            for (String table : List.of("user_preferences", "user_favorites", "user_social_accounts",
+                    "user_email_credentials", "user_refresh_sessions", "user_consents", "auth_action_tickets")) {
+                assertThat(db.queryForObject("SELECT COUNT(*) FROM " + table + " WHERE user_id=?", Long.class, member.id))
+                        .as(table).isZero();
+            }
+        } finally {
+            db.update("DELETE FROM user_favorites WHERE user_id=?", member.id);
+            db.update("DELETE FROM charging_stations WHERE station_id=?", stationId);
+            db.update("DELETE FROM users WHERE user_id=?", member.id);
+        }
+    }
+
+    @Test
+    void refusesProviderProofThatStartedBeforeDisconnectEvenWhenItFinishesLater() throws Exception {
+        var member = account("fenced");
+        var other = account("recipient");
+        String access = member.tokens.accessToken();
+        String subject = fixture + "fence";
+        var provider = application.getBean("stubVerifier", SocialIdentityVerifier.class);
+        var identity = new SocialIdentityVerifier.Identity("KAKAO", subject, address("fenced"), null, null);
+        when(provider.verify("KAKAO", "setup-fence")).thenReturn(identity);
+        send("POST", "/api/users/me/social-accounts/kakao",
+                Map.of("providerAccessToken", "setup-fence", "reauthenticationToken", reauth(access, "LINK_SOCIAL")),
+                access, 201);
+        String unlink = reauth(access, "UNLINK_SOCIAL");
+        var verified = new CountDownLatch(2);
+        var finish = new CountDownLatch(1);
+        when(provider.verify("KAKAO", "before-disconnect")).thenAnswer(call -> {
+            verified.countDown();
+            if (!finish.await(6, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Disconnect did not finish");
+            }
+            return identity;
+        });
+        String recipient = other.tokens.accessToken();
+        String link = reauth(recipient, "LINK_SOCIAL");
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var login = executor.submit(() -> send("POST", "/api/auth/social/kakao",
+                    Map.of("providerAccessToken", "before-disconnect"), null, 401));
+            var linking = executor.submit(() -> send("POST", "/api/users/me/social-accounts/kakao",
+                    Map.of("providerAccessToken", "before-disconnect", "reauthenticationToken", link), recipient, 401));
+            try {
+                assertThat(verified.await(4, TimeUnit.SECONDS)).isTrue();
+                send("DELETE", "/api/users/me/social-accounts/kakao", Map.of("reauthenticationToken", unlink), access, 204);
+            } finally {
+                finish.countDown();
+            }
+            assertCode(login.get(), "INVALID_PROVIDER_TOKEN");
+            assertCode(linking.get(), "INVALID_PROVIDER_TOKEN");
+        }
+        assertThat(send("GET", "/api/users/me/social-accounts", null, recipient, 200).path("items").size()).isZero();
+        send("POST", "/api/auth/social/kakao", Map.of("providerAccessToken", "setup-fence"), null, 202);
+    }
+
+    @Test
+    void deniesOldProviderProofAndAllowsRetryAfterLocalRollbackFollowingRemoteUnlink() throws Exception {
+        var member = account("rollback");
+        String access = member.tokens.accessToken();
+        String subject = fixture + "rollback";
+        var identity = new SocialIdentityVerifier.Identity("KAKAO", subject, address("rollback"), null, null);
+        var verifier = application.getBean("stubVerifier", SocialIdentityVerifier.class);
+        when(verifier.verify("KAKAO", "rollback-provider")).thenReturn(identity);
+        send("POST", "/api/users/me/social-accounts/kakao",
+                Map.of("providerAccessToken", "rollback-provider", "reauthenticationToken", reauth(access, "LINK_SOCIAL")),
+                access, 201);
+        String unlink = reauth(access, "UNLINK_SOCIAL");
+        var started = application.getBean(SocialProofGuard.class).now();
+        var jwt = application.getBean(WattUpJwt.class).decode(access);
+        var actions = application.getBean(AccountActions.class);
+        new TransactionTemplate(application.getBean(PlatformTransactionManager.class)).executeWithoutResult(tx -> {
+            actions.unlink(jwt, "KAKAO", unlink);
+            tx.setRollbackOnly();
+        });
+        assertThat(send("GET", "/api/users/me/social-accounts", null, access, 200).path("items").size()).isEqualTo(1);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> application.getBean(AuthAccounts.class).social(identity, started))
+                .isInstanceOfSatisfying(AuthFailure.class, failure -> assertThat(failure.code).isEqualTo("INVALID_PROVIDER_TOKEN"));
+        send("DELETE", "/api/users/me/social-accounts/kakao", Map.of("reauthenticationToken", unlink), access, 204);
+    }
+
+    private Member account(String tag) {
+        String nickname = fixture + tag;
+        db.update("INSERT INTO users (nickname) VALUES (?)", nickname);
+        long id = db.queryForObject("SELECT user_id FROM users WHERE nickname=?", Long.class, nickname);
+        addPassword(id, address(tag));
+        return new Member(id, application.getBean(AuthSessions.class).start(id, null));
+    }
+
+    private void addPassword(long id, String email) {
+        var bcrypt = new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder(4);
+        db.update("""
+                INSERT INTO user_email_credentials (user_id,email,password_hash,email_verified_at)
+                VALUES (?,?,?,UTC_TIMESTAMP(3))
+                """, id, email, bcrypt.encode(PASSWORD));
+    }
+
+    private String sessionId(AuthSessions.Tokens tokens) {
+        return application.getBean(WattUpJwt.class).decode(tokens.accessToken()).getClaimAsString("sid");
+    }
+
+    private String reauth(String access, String purpose) throws Exception {
+        return send("POST", "/api/users/me/reauthentication", Map.of("purpose", purpose,
+                "method", "PASSWORD", "password", PASSWORD), access, 200).path("reauthenticationToken").asText();
+    }
+
+    private record Member(long id, AuthSessions.Tokens tokens) {}
+
     private String address(String type) {
         return type + "." + fixture.toLowerCase(java.util.Locale.ROOT) + "@example.test";
     }
@@ -282,6 +521,12 @@ class AuthApiTests {
         @Primary
         SocialIdentityVerifier stubVerifier() {
             return mock(SocialIdentityVerifier.class);
+        }
+
+        @Bean
+        @Primary
+        KakaoDisconnect stubDisconnect() {
+            return mock(KakaoDisconnect.class);
         }
     }
 }

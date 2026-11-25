@@ -8,7 +8,8 @@
 - 완료 범주 B · 비회원 주변 검색, 상세, 충전기 목록, 현재 상태. PR [#4](https://github.com/YU-AI-Service-Project/Backend/pull/4)를 `7b3cb76`으로 Squash Merge했다.
 - 완료 범주 C · 비회원 단건·배치 도착 예측과 Spring Boot 클라이언트. PR [#5](https://github.com/YU-AI-Service-Project/Backend/pull/5)를 `388e5bd`로 Squash Merge했다. 실제 FastAPI·카카오 연동은 별도 검증 대상이다.
 - 완료 범주 D · 서버 Top-3 추천과 Android용 통합 응답. PR [#6](https://github.com/YU-AI-Service-Project/Backend/pull/6)을 `a3fcb9c`로 Squash Merge했다.
-- 현재 범주 E · `feat/auth`. 소셜 로그인, 약관, 토큰·세션, 이메일 가입·비밀번호 API 14개를 구현했다. [GitHub PR 검색](https://github.com/YU-AI-Service-Project/Backend/pulls?q=is%3Apr+head%3Afeat%2Fauth)
+- 완료 범주 E · 소셜 로그인, 약관, 토큰·세션, 이메일 가입·비밀번호 API 14개. PR [#7](https://github.com/YU-AI-Service-Project/Backend/pull/7)을 `a245d73`으로 Squash Merge했다.
+- 현재 범주 F · `feat/account-management`. 내 계정·탈퇴 API 11개를 구현했다. [GitHub PR 검색](https://github.com/YU-AI-Service-Project/Backend/pulls?q=is%3Apr+head%3Afeat%2Faccount-management)
 - 범주 A는 수집 내부 서비스에 집중한다. 관리자 HTTP 49–51은 인증·운영 정책과 함께 H에서 제공한다. 공단 실연동은 인증키와 실호출 승인 후 검증한다.
 - FastAPI 추론 경로 47·48의 소유자는 AI 서버다. Spring Boot는 계약 및 호출 클라이언트를 담당한다. 52번 AI 연결 상태는 Spring Boot 소유다.
 - 각 범주의 CI와 병합 상태는 해당 PR을 기준으로 기록한다.
@@ -54,7 +55,16 @@
 - 액세스 JWT 인증 때 세션과 사용자 상태를 확인한다. 갱신, 재사용 탐지, 로그아웃, 비밀번호 갱신은 사용자 행 잠금으로 직렬화한다. OAuth 토큰은 저장하지 않는다. 갱신 토큰과 티켓은 해시, 이메일 인증 코드는 HMAC, 비밀번호는 BCrypt로 저장한다.
 - 이메일 가입 코드 실패와 재발송 제한, 갱신 토큰 동시 제출, 토큰·티켓 재사용, 만료, 비회원 조회를 테스트한다. 이메일 재설정은 새 요청이 기존 토큰을 폐기하지 않으며, 비밀번호 갱신 시 남은 토큰을 한 번에 폐기한다.
 - Java 25·MySQL 8.4에서 `mvnw.cmd clean verify` 전체 59개 통과, 실패·건너뜀 0개.
-- 실제 OAuth 앱, SMTP 전달, 팀 약관 문서 배포와 Android 연동은 별도 확인이 필요하다. 다음 범주는 F의 회원 관리와 탈퇴다.
+- 실제 OAuth 앱, SMTP 전달, 팀 약관 문서 배포와 Android 연동은 별도 확인이 필요하다. [PR CI](https://github.com/YU-AI-Service-Project/Backend/actions/runs/45420341708)에서 새 MySQL의 V1–V5 적용과 테스트 59개 통과를 확인했다.
+
+## 범주 F 검증과 인계
+
+- Flyway V6에서 탈퇴 시 삭제할 즐겨찾기·개인 설정 테이블을 만들었다. 해당 API는 G에서 이 테이블을 재사용한다. V7은 탈퇴용 티켓 조회 인덱스를 추가한다. V8은 사용자 식별자나 토큰 없이 소셜 해제 시각을 기록해 해제 이전에 시작된 검증 결과를 차단한다.
+- 재인증은 비밀번호 또는 현재 연결된 소셜 신원을 검증한다. 5분짜리 티켓은 계정·기기·목적에 묶이며 성공하면 재사용할 수 없다. 본인 세션만 조회하고 종료할 수 있다.
+- 탈퇴는 시작 설정에서 비활성화한다. 적용 시 상태 기록을 남기고 기존 세션·자격 증명·연결·티켓·동의 이력·개인 설정을 삭제한다. 운영 정책은 배포 전에 확정한다.
+- 카카오 연결 해제는 관리자 키로 요청한다. 테스트 대역에서 외부 실패 시 로컬 상태 유지, 외부 성공 뒤 로컬 롤백과 재시도, 동시 로그인·연결 요청 차단을 확인한다. 재시도의 기존 티켓이 만료되면 다시 재인증해야 한다. Google OAuth 권한 철회는 앱에서 사용할 권한 및 토큰 종류를 팀이 확정해야 한다.
+- Java 25·MySQL 8.4에서 `mvnw.cmd clean verify` 전체 68개 통과, 실패·건너뜀 0개. 실제 카카오 앱의 연결 해제와 Android 실기기 동작은 별도 확인이 필요하다.
+- 다음 범주는 G의 즐겨찾기·개인 설정과 장소 검색이다.
 
 ## API 52개 추적표
 
@@ -89,17 +99,17 @@
 | 25 | `POST /api/auth/password-resets` | 비밀번호 재설정 메일 발송 | 이메일 선택 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
 | 26 | `POST /api/auth/password-resets/confirm` | 비밀번호 재설정 확정 | 이메일 선택 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
 | 27 | `PATCH /api/users/me/password` | 로그인 후 비밀번호 변경 | 이메일 선택 | E | 구현 · 운영 검증 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AuthController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
-| 28 | `GET /api/users/me` | 내 정보 조회 | 계정 협의 | F | 미구현 | — |
-| 29 | `PATCH /api/users/me` | 닉네임·프로필 수정 | 계정 협의 | F | 미구현 | — |
-| 30 | `POST /api/users/me/reauthentication` | 중요한 계정 작업 전 본인 재확인 | 계정 협의 | F | 미구현 | — |
-| 31 | `DELETE /api/users/me` | 회원 탈퇴·세션 무효화·자료 정리 | 계정 협의 | F | 미구현 | — |
-| 32 | `GET /api/users/me/social-accounts` | 연결된 카카오·Google 계정 확인 | 계정 협의 | F | 미구현 | — |
-| 33 | `POST /api/users/me/social-accounts/{provider}` | 추가 소셜 계정 연결(선택) | 계정 협의 | F | 미구현 | — |
-| 34 | `DELETE /api/users/me/social-accounts/{provider}` | 소셜 계정 연결 해제(선택) | 계정 협의 | F | 미구현 | — |
-| 35 | `GET /api/users/me/agreements` | 내 약관 동의 상태 조회 | 계정 협의 | F | 미구현 | — |
-| 36 | `PATCH /api/users/me/agreements` | 선택 동의 수정 | 계정 협의 | F | 미구현 | — |
-| 37 | `GET /api/users/me/sessions` | 로그인 중인 기기/세션 목록(선택) | 계정 협의 | F | 미구현 | — |
-| 38 | `DELETE /api/users/me/sessions/{sessionId}` | 개별 세션 로그아웃(선택) | 계정 협의 | F | 미구현 | — |
+| 28 | `GET /api/users/me` | 내 정보 조회 | 계정 협의 | F | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/AccountController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 29 | `PATCH /api/users/me` | 닉네임·프로필 수정 | 계정 협의 | F | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/AccountController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 30 | `POST /api/users/me/reauthentication` | 중요한 계정 작업 전 본인 재확인 | 계정 협의 | F | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/AccountController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 31 | `DELETE /api/users/me` | 회원 탈퇴·세션 무효화·자료 정리 | 계정 협의 | F | 구현 · 운영 확인 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AccountController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 32 | `GET /api/users/me/social-accounts` | 연결된 카카오·Google 계정 확인 | 계정 협의 | F | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/AccountController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 33 | `POST /api/users/me/social-accounts/{provider}` | 추가 소셜 계정 연결(선택) | 계정 협의 | F | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/AccountController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 34 | `DELETE /api/users/me/social-accounts/{provider}` | 소셜 계정 연결 해제(선택) | 계정 협의 | F | 구현 · 운영 확인 대기 | [Controller](../../src/main/java/dev/wattup/backend/auth/AccountController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 35 | `GET /api/users/me/agreements` | 내 약관 동의 상태 조회 | 계정 협의 | F | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/AccountController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 36 | `PATCH /api/users/me/agreements` | 선택 동의 수정 | 계정 협의 | F | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/AccountController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 37 | `GET /api/users/me/sessions` | 로그인 중인 기기/세션 목록(선택) | 계정 협의 | F | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/AccountController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 38 | `DELETE /api/users/me/sessions/{sessionId}` | 개별 세션 로그아웃(선택) | 계정 협의 | F | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/AccountController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
 | 39 | `GET /api/users/me/favorites` | 즐겨찾기 목록 | 계정 협의 | G | 미구현 | — |
 | 40 | `POST /api/users/me/favorites` | 즐겨찾기 등록 | 계정 협의 | G | 미구현 | — |
 | 41 | `DELETE /api/users/me/favorites/{stationId}` | 즐겨찾기 해제 | 계정 협의 | G | 미구현 | — |

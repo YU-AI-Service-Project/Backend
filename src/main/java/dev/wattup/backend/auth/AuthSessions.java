@@ -94,6 +94,20 @@ class AuthSessions {
         }
     }
 
+    long lockCurrent(Jwt access) {
+        long userId = userId(access);
+        requireActiveAndLock(userId);
+        var rows = db.query("""
+                SELECT session_id FROM user_refresh_sessions
+                WHERE user_id = ? AND session_family_id = ? AND revoked_at IS NULL AND expires_at > ?
+                LIMIT 1 FOR UPDATE
+                """, (rs, i) -> rs.getLong(1), userId, access.getClaimAsString("sid"), AuthValues.utcNow());
+        if (rows.isEmpty()) {
+            throw new AuthFailure(401, "UNAUTHORIZED");
+        }
+        return userId;
+    }
+
     boolean activeAndLock(long userId) {
         List<String> states = db.query("SELECT account_status FROM users WHERE user_id = ? FOR UPDATE",
                 (rs, i) -> rs.getString(1), userId);

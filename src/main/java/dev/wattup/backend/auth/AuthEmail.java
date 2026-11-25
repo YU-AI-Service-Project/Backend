@@ -172,6 +172,11 @@ class AuthEmail {
         retireResetTickets(userId);
     }
 
+    boolean verifyPassword(long userId, String password) {
+        return db.query("SELECT password_hash FROM user_email_credentials WHERE user_id = ? FOR UPDATE",
+                (rs, i) -> rs.getString(1), userId).stream().findFirst().filter(hash -> matches(password, hash)).isPresent();
+    }
+
     private Optional<Credential> credential(String email, boolean lock) {
         return db.query("SELECT user_id, password_hash FROM user_email_credentials WHERE email = ?"
                 + (lock ? " FOR UPDATE" : ""), (rs, i) -> new Credential(rs.getLong(1), rs.getString(2)), email)

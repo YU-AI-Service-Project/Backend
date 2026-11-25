@@ -24,7 +24,10 @@ wattup:
     email-secret: "${WATTUP_AUTH_EMAIL_SECRET:}"
     mail-from: "${WATTUP_AUTH_MAIL_FROM:}"
     kakao-app-id: "${WATTUP_AUTH_KAKAO_APP_ID:}"
+    kakao-admin-key: "${WATTUP_AUTH_KAKAO_ADMIN_KEY:}"
     google-client-id: "${WATTUP_AUTH_GOOGLE_CLIENT_ID:}"
+  account:
+    withdrawal-enabled: "${WATTUP_ACCOUNT_WITHDRAWAL_ENABLED:false}"
   recommendation:
     candidate-limit: "${WATTUP_RECOMMENDATION_CANDIDATE_LIMIT:10}"
   prediction:

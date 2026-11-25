@@ -24,15 +24,17 @@ class AuthController {
     private final SocialIdentityVerifier social;
     private final AuthRateLimit rate;
     private final AuthMail mail;
+    private final SocialProofGuard proof;
 
     AuthController(AuthAccounts accounts, AuthSessions sessions, AuthEmail email, SocialIdentityVerifier social,
-                   AuthRateLimit rate, AuthMail mail) {
+                   AuthRateLimit rate, AuthMail mail, SocialProofGuard proof) {
         this.accounts = accounts;
         this.sessions = sessions;
         this.email = email;
         this.social = social;
         this.rate = rate;
         this.mail = mail;
+        this.proof = proof;
     }
 
     @GetMapping("/api/auth/agreements")
@@ -52,6 +54,7 @@ class AuthController {
 
     private ResponseEntity<?> socialLogin(String provider, String token, HttpServletRequest servlet) {
         ipLimit("social", servlet);
+        var startedAt = proof.now();
         SocialIdentityVerifier.Identity identity;
         try {
             identity = social.verify(provider, token);
@@ -60,7 +63,7 @@ class AuthController {
                     : new AuthFailure(401, "INVALID_PROVIDER_TOKEN");
         }
         rate.hit("social-identity", provider + "|" + identity.subject(), 12, TEN_MINUTES, "RATE_LIMITED");
-        var result = accounts.social(identity);
+        var result = accounts.social(identity, startedAt);
         return result.login() == null ? ResponseEntity.accepted().body(result.registration())
                 : ResponseEntity.ok(result.login());
     }
