@@ -85,7 +85,7 @@ class EtaHistoryRepository {
                 FROM inventory c
                 CROSS JOIN sample_grid g
                 LEFT JOIN charger_status_observations o ON o.observation_id = (
-                  SELECT h.observation_id FROM charger_status_observations h
+                  SELECT h.observation_id FROM charger_status_observations h FORCE INDEX (idx_observation_charger_time)
                   JOIN collection_runs r ON h.collection_run_id = r.run_id
                   WHERE h.charger_id = c.charger_id AND h.used_for_current = TRUE
                     AND r.status = 'SUCCEEDED' AND r.is_complete = TRUE
