@@ -13,15 +13,16 @@ import org.springframework.transaction.TransactionException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
-@RestControllerAdvice(assignableTypes = {AuthController.class, AccountController.class})
+@RestControllerAdvice(assignableTypes = {AuthController.class, AccountController.class, PersonalizationController.class})
 class AuthAdvice implements ResponseBodyAdvice<Object> {
     @ExceptionHandler(AuthFailure.class)
     ResponseEntity<AuthFailure.Envelope> handle(AuthFailure failure) {
         return ResponseEntity.status(failure.status).body(failure.response());
     }
 
-    @ExceptionHandler(HttpMessageNotReadableException.class)
+    @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class})
     ResponseEntity<AuthFailure.Envelope> badBody() {
         return handle(new AuthFailure(400, "INVALID_REQUEST"));
     }
