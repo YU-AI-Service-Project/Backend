@@ -134,6 +134,7 @@ class AccountActions {
         db.update("DELETE FROM user_consents WHERE user_id=?", id);
         db.update("DELETE FROM user_favorites WHERE user_id=?", id);
         db.update("DELETE FROM user_preferences WHERE user_id=?", id);
+        db.update("DELETE FROM support_reports WHERE user_id=?", id);
     }
 
     private Optional<String> subject(long id, String provider) {
