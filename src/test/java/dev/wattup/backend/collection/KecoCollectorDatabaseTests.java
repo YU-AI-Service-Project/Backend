@@ -233,6 +233,45 @@ class KecoCollectorDatabaseTests {
                 "SELECT source_deleted FROM charging_stations WHERE station_id = ?", Boolean.class, "KECO:" + station));
     }
 
+    @Test
+    void queuesManualCollectionOnceAndPublishesItsExecutionInHistory() throws Exception {
+        String region = "31";
+        var clock = Clock.systemUTC();
+        var operations = new CollectorOperationsController(
+                new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate(jdbc),
+                new CollectionRunRepository(jdbc), true, true, region, clock);
+        var request = new CollectorOperationsController.Manual("STATUS_FULL", "test manual refresh");
+        var server = upstream(exchange -> page(1, 0, ""));
+        try {
+            var response = operations.enqueue(request);
+            assertThat(response.getStatusCode().value()).isEqualTo(202);
+            long runId = Long.parseLong(java.util.Objects.requireNonNull(response.getBody()).runId());
+            try {
+                assertThat(status(runId)).isEqualTo("QUEUED");
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> operations.enqueue(request))
+                        .isInstanceOf(dev.wattup.backend.operations.InternalFailure.class);
+                assertThat(operations.runs("STATUS_FULL", "QUEUED", 0, 10).items()).singleElement()
+                        .satisfies(run -> assertThat(run.startedAt()).isNull());
+                collector(server, 1000, region).collectQueued();
+                assertThat(status(runId)).isEqualTo("SUCCEEDED");
+                assertThat(operations.runs("STATUS_FULL", "SUCCEEDED", 0, 10).items())
+                        .filteredOn(run -> run.runId() == runId).singleElement()
+                        .satisfies(run -> {
+                            assertThat(run.runId()).isEqualTo(runId);
+                            assertThat(run.completedAt()).isNotNull();
+                            assertThat(run.pageCount()).isEqualTo(1);
+                        });
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> operations.enqueue(request))
+                        .isInstanceOf(dev.wattup.backend.operations.InternalFailure.class);
+            } finally {
+                jdbc.update("DELETE FROM collection_run_pages WHERE run_id=?", runId);
+                jdbc.update("DELETE FROM collection_runs WHERE run_id=?", runId);
+            }
+        } finally {
+            server.stop(0);
+        }
+    }
+
     private KecoCollector collector(HttpServer upstream) {
         return collector(upstream, 1000);
     }

@@ -13,19 +13,24 @@ import java.time.Duration;
 @Configuration(proxyBeanMethods = false)
 class PredictionConfiguration {
     @Bean
-    PredictionService predictionService(EtaHistoryRepository history, JsonMapper json,
-            @Value("${wattup.prediction.kakao-rest-api-key}") String kakaoKey,
+    EtaBatchClient etaBatchClient(JsonMapper json,
             @Value("${wattup.prediction.ai-batch-url}") String aiBatchUrl,
             @Value("${wattup.prediction.ai-bearer-token}") String aiToken) {
+        var http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
+        return new EtaBatchClient(http, json, batchEndpoint(aiBatchUrl), aiToken, Duration.ofSeconds(2));
+    }
+
+    @Bean
+    PredictionService predictionService(EtaHistoryRepository history, JsonMapper json, EtaBatchClient ai,
+            @Value("${wattup.prediction.kakao-rest-api-key}") String kakaoKey) {
         var http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
         var clock = Clock.systemUTC();
         var routes = new KakaoRouteClient(http, json, URI.create("https://apis-navi.kakaomobility.com/v1/directions"),
                 kakaoKey, Duration.ofSeconds(2), clock);
-        var ai = new EtaBatchClient(http, json, batchEndpoint(aiBatchUrl), aiToken, Duration.ofSeconds(2));
         return new PredictionService(history, routes, ai, clock);
     }
 
-    private static URI batchEndpoint(String value) {
+    static URI batchEndpoint(String value) {
         if (value.isBlank()) {
             return null;
         }

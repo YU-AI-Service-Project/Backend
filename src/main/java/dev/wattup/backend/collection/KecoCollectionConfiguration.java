@@ -24,7 +24,8 @@ class KecoCollectionConfiguration {
             @Value("${wattup.collection.service-key}") String key,
             @Value("${wattup.collection.region}") String region,
             @Value("${wattup.collection.page-size}") int pageSize,
-            @Value("${wattup.collection.daily-limit}") int dailyLimit) {
+            @Value("${wattup.collection.daily-limit}") int dailyLimit,
+            @Value("${wattup.internal.manual-collection-enabled:false}") boolean manualEnabled) {
         var settings = new KecoCollectionSettings(key, region, pageSize, dailyLimit);
         var http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
         var api = new KecoApiClient(http, json, URI.create("https://apis.data.go.kr/B552584/EvCharger/"),
@@ -32,6 +33,6 @@ class KecoCollectionConfiguration {
         var runs = new CollectionRunRepository(jdbc);
         var collector = new KecoCollector(api, runs, new ChargerCollectionRepository(jdbc),
                 transactions, settings, Clock.systemUTC());
-        return new KecoCollectionSchedule(collector, runs, region);
+        return new KecoCollectionSchedule(collector, runs, region, manualEnabled);
     }
 }
