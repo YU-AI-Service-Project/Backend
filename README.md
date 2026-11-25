@@ -7,7 +7,7 @@ WattUp의 Spring Boot 서버입니다.
 ## 개발 요구사항
 
 - Java 25
-- Spring Boot 4.0.8
+- Spring Boot 4.0.10
 - Maven 3.9.16 (Maven Wrapper 사용)
 - MySQL 8.4 LTS
 
