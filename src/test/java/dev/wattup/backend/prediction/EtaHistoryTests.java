@@ -4,12 +4,14 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import dev.wattup.backend.WattUpApplication;
 import dev.wattup.backend.station.ChargerProfile;
+import dev.wattup.backend.station.PredictionQualityCapture;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -84,6 +86,7 @@ class EtaHistoryTests {
                 "--spring.datasource.url=" + url, "--wattup.collection.enabled=false", "--server.port=0",
                 "--server.address=127.0.0.1", "--wattup.prediction.ai-batch-url=" + base + "/arrival",
                 "--wattup.prediction.ai-bearer-token=fixture", "--wattup.prediction.kakao-rest-api-key=",
+                "--wattup.prediction.quality-capture-enabled=true",
                 "--test.route-url=" + base + "/route", "--test.prediction-time=" + grid);
              var http = HttpClient.newHttpClient()) {
             var jdbc = app.getBean(JdbcTemplate.class);
@@ -131,6 +134,19 @@ class EtaHistoryTests {
                         assertThat(result.path("rankingBasis").asText()).isEqualTo("DISTANCE_CURRENT_STATUS_OUTPUT_PREDICTION");
                     }
                 }
+                String countSql = "SELECT COUNT(*) FROM eta_prediction_samples WHERE station_id=?";
+                long deadline = System.nanoTime() + Duration.ofSeconds(3).toNanos();
+                while (jdbc.queryForObject(countSql, Long.class, station) == 0 && System.nanoTime() < deadline) {
+                    Thread.sleep(20);
+                }
+                assertThat(jdbc.queryForObject(countSql, Long.class, station)).isEqualTo(1);
+                assertThat(jdbc.queryForObject("SELECT probability FROM eta_prediction_samples WHERE station_id=?",
+                        Double.class, station)).isEqualTo(0.82);
+                var unverified = http.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port
+                        + "/api/charging-stations/" + station + "/prediction-quality?profile=AC_SLOW")).GET().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                assertThat(unverified.statusCode()).isEqualTo(200);
+                assertThat(json.readTree(unverified.body()).path("dataSufficiency").asText()).isEqualTo("UNVERIFIED_MODEL");
             } finally {
                 jdbc.update("DELETE cs FROM charger_current_status cs JOIN chargers c USING (charger_id) WHERE c.station_id=?", station);
                 jdbc.update("DELETE o FROM charger_status_observations o JOIN chargers c USING (charger_id) WHERE c.station_id=?", station);
@@ -156,10 +172,11 @@ class EtaHistoryTests {
         @Bean
         @Primary
         PredictionService loopbackPrediction(EtaHistoryRepository history, EtaBatchClient ai, JsonMapper json,
+                ObjectProvider<PredictionQualityCapture> quality,
                 @Value("${test.route-url}") URI route, @Value("${test.prediction-time}") String time) {
             var clock = Clock.fixed(Instant.parse(time), ZoneOffset.UTC);
             var routes = new KakaoRouteClient(HttpClient.newHttpClient(), json, route, "fixture", Duration.ofSeconds(2), clock);
-            return new PredictionService(history, routes, ai, clock);
+            return new PredictionService(history, routes, ai, clock, Duration.ofSeconds(9), quality.getIfAvailable());
         }
     }
 

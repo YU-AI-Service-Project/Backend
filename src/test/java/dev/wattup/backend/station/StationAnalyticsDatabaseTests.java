@@ -13,6 +13,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -21,6 +22,52 @@ import static org.assertj.core.api.Assertions.within;
 
 @EnabledIfEnvironmentVariable(named = "WATTUP_TEST_DB_URL", matches = ".+")
 class StationAnalyticsDatabaseTests {
+    @Test
+    void evaluatesOnlyDistinctForecastsWithCompleteMatchingOutcomes() {
+        String url = System.getenv("WATTUP_TEST_DB_URL");
+        if (!url.matches("jdbc:mysql://[^/?#]+/wattup_test(?:\\?[^#]*)?")) {
+            throw new IllegalArgumentException("WATTUP_TEST_DB_URL must point to wattup_test");
+        }
+        try (var context = new SpringApplicationBuilder(WattUpApplication.class).web(WebApplicationType.NONE)
+                .run("--spring.datasource.url=" + url, "--wattup.collection.enabled=false")) {
+            var fixture = new Fixture(context.getBean(JdbcTemplate.class));
+            var quality = context.getBean(PredictionQualityRepository.class);
+            Instant start = Fixture.day(60);
+            try {
+                fixture.inventory();
+                assertThat(quality.evaluate(fixture.station, ChargerProfile.ALL, start, Fixture.day(64)).sampleCount())
+                        .isZero();
+                fixture.sample(quality, start, "old", 0.9);
+                for (int day = 0; day < 3; day++) {
+                    for (int hour = 0; hour < 10; hour++) {
+                        Instant target = start.plus(day, ChronoUnit.DAYS).plus(hour, ChronoUnit.HOURS);
+                        fixture.sample(quality, target, "v4", hour < 5 ? 0.15 : 0.8);
+                        fixture.full(target.plusSeconds(60), hour % 2 == 0 ? "AVAILABLE" : "CHARGING", "CHARGING");
+                    }
+                }
+                fixture.sample(quality, start, "v4", 0.99);
+                Instant unknown = Fixture.day(63);
+                fixture.sample(quality, unknown, "v4", 0.1);
+                fixture.full(unknown.plusSeconds(60), "UNKNOWN", "AVAILABLE");
+                Instant tooLate = unknown.plus(1, ChronoUnit.HOURS);
+                fixture.sample(quality, tooLate, "v4", 0.9);
+                fixture.full(tooLate.plusSeconds(300), "AVAILABLE", "AVAILABLE");
+                var result = quality.evaluate(fixture.station, ChargerProfile.ALL, start, Fixture.day(64));
+                assertThat(result.modelVersion()).isEqualTo("v4");
+                assertThat(result.sampleCount()).isEqualTo(30);
+                assertThat(result.dayCount()).isEqualTo(3);
+                assertThat(result.buckets()).containsExactly(
+                        new PredictionQualityRepository.Bucket(0, 15, 0.6),
+                        new PredictionQualityRepository.Bucket(4, 15, 0.4));
+                fixture.charger("03", "04");
+                assertThat(quality.evaluate(fixture.station, ChargerProfile.ALL, start, Fixture.day(64)).sampleCount())
+                        .isZero();
+            } finally {
+                fixture.clean();
+            }
+        }
+    }
+
     @Test
     void requiresCompleteCohortSamplesAndOmitsUnknownFailedAndLongTurnoverIntervals() {
         String url = System.getenv("WATTUP_TEST_DB_URL");
@@ -71,10 +118,7 @@ class StationAnalyticsDatabaseTests {
         }
 
         void seed() {
-            db.update("INSERT INTO charging_stations (station_id,source_station_id,station_name) VALUES (?,?,'Fixture')",
-                    station, station.substring(5));
-            dc = charger("01", "04");
-            ac = charger("02", "02");
+            inventory();
             full(START, "AVAILABLE", "AVAILABLE");
             full(START.plus(10, ChronoUnit.MINUTES), "CHARGING", "AVAILABLE");
             full(day(7), "AVAILABLE", "CHARGING");
@@ -89,6 +133,19 @@ class StationAnalyticsDatabaseTests {
             full(morning.plus(4, ChronoUnit.HOURS), "AVAILABLE", "AVAILABLE");
             full(morning.plus(5, ChronoUnit.HOURS), "AVAILABLE", "AVAILABLE");
             full(morning.plus(8, ChronoUnit.HOURS), "CHARGING", "AVAILABLE");
+        }
+
+        void inventory() {
+            db.update("INSERT INTO charging_stations (station_id,source_station_id,station_name) VALUES (?,?,'Fixture')",
+                    station, station.substring(5));
+            dc = charger("01", "04");
+            ac = charger("02", "02");
+        }
+
+        void sample(PredictionQualityRepository quality, Instant target, String model, double probability) {
+            quality.capture(List.of(new PredictionQualityRepository.Sample(station, ChargerProfile.ALL, model,
+                    "daegu-eta-v4", target.minusSeconds(900), target.minusSeconds(60), target, probability,
+                    List.of(Long.toString(dc), Long.toString(ac)))));
         }
 
         void clean() {

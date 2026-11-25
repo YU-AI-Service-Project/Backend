@@ -26,8 +26,9 @@ class StationAnalyticsTests {
     private final ChargingStationService nearby = mock(ChargingStationService.class);
     private final StationAnalyticsRepository observations = mock(StationAnalyticsRepository.class);
     private final PredictionService predictions = mock(PredictionService.class);
+    private final PredictionQualityRepository quality = mock(PredictionQualityRepository.class);
     private final org.springframework.test.web.servlet.MockMvc api = MockMvcBuilders.standaloneSetup(
-            new StationAnalyticsController(stations, nearby, observations, predictions))
+            new StationAnalyticsController(stations, nearby, observations, predictions, quality))
             .setControllerAdvice(new StationApiAdvice()).build();
 
     @Test
@@ -57,6 +58,8 @@ class StationAnalyticsTests {
         when(observations.patterns(eq(STATION), eq(ChargerProfile.ALL), any(), any())).thenReturn(List.of());
         when(observations.turnover(eq(STATION), eq(ChargerProfile.ALL), any(), any())).thenReturn(
                 new StationAnalyticsRepository.Turnover(2, 2, 1, 0, 0, NOW.minusSeconds(7200), NOW));
+        when(quality.evaluate(eq(STATION), eq(ChargerProfile.ALL), any(), any()))
+                .thenReturn(new PredictionQualityRepository.Evaluation(null, null, 0, 0, List.of()));
 
         api.perform(get(BASE + "/patterns")).andExpect(status().isOk())
                 .andExpect(jsonPath("$.observedPeriod").isEmpty())
@@ -68,6 +71,30 @@ class StationAnalyticsTests {
                 .andExpect(jsonPath("$.dataSufficiency").value("UNVERIFIED_MODEL"))
                 .andExpect(jsonPath("$.evaluationSampleCount").value(0))
                 .andExpect(jsonPath("$.probabilityBuckets").isEmpty());
+    }
+
+    @Test
+    void reportsOnlySufficientProbabilityBucketsAndIdentifiesTheModelAndObservationBasis() throws Exception {
+        stationExists();
+        var buckets = List.of(new PredictionQualityRepository.Bucket(0, 4, 0.25),
+                new PredictionQualityRepository.Bucket(4, 26, 0.77));
+        when(quality.evaluate(eq(STATION), eq(ChargerProfile.ALL), any(), any()))
+                .thenReturn(new PredictionQualityRepository.Evaluation("v4", "eta", 30, 2, buckets),
+                        new PredictionQualityRepository.Evaluation("v4", "eta", 30, 3, buckets));
+
+        api.perform(get(BASE + "/prediction-quality")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.dataSufficiency").value("INSUFFICIENT_EVALUATION"))
+                .andExpect(jsonPath("$.evaluationSampleCount").value(30))
+                .andExpect(jsonPath("$.probabilityBuckets").isEmpty());
+        api.perform(get(BASE + "/prediction-quality")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.dataSufficiency").value("SUFFICIENT"))
+                .andExpect(jsonPath("$.modelVersion").value("v4"))
+                .andExpect(jsonPath("$.observationBasis").value("FULL_SNAPSHOT_WITHIN_FORECAST_GRID"))
+                .andExpect(jsonPath("$.evaluationDayCount").value(3))
+                .andExpect(jsonPath("$.probabilityBuckets.length()").value(1))
+                .andExpect(jsonPath("$.probabilityBuckets[0].minimumProbability").value(0.8))
+                .andExpect(jsonPath("$.probabilityBuckets[0].sampleCount").value(26))
+                .andExpect(jsonPath("$.probabilityBuckets[0].observedFraction").value(0.77));
     }
 
     @Test

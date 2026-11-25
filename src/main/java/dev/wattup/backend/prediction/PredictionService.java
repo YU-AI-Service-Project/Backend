@@ -1,6 +1,8 @@
 package dev.wattup.backend.prediction;
 
 import dev.wattup.backend.station.ChargerProfile;
+import dev.wattup.backend.station.PredictionQualityCapture;
+import dev.wattup.backend.station.PredictionQualityRepository;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -27,6 +29,7 @@ public final class PredictionService {
     private final EtaBatchClient ai;
     private final Clock clock;
     private final Duration routeBudget;
+    private final PredictionQualityCapture quality;
     private final Semaphore activeBatches = new Semaphore(4);
     private final Semaphore activeRoutes = new Semaphore(8, true);
 
@@ -36,11 +39,17 @@ public final class PredictionService {
 
     PredictionService(EtaHistoryRepository history, KakaoRouteClient routes, EtaBatchClient ai, Clock clock,
                       Duration routeBudget) {
+        this(history, routes, ai, clock, routeBudget, null);
+    }
+
+    PredictionService(EtaHistoryRepository history, KakaoRouteClient routes, EtaBatchClient ai, Clock clock,
+                      Duration routeBudget, PredictionQualityCapture quality) {
         this.history = history;
         this.routes = routes;
         this.ai = ai;
         this.clock = clock;
         this.routeBudget = routeBudget;
+        this.quality = quality;
     }
 
     Batch predict(List<String> stationIds, ChargerProfile profile, PredictionController.Origin origin) {
@@ -114,10 +123,33 @@ public final class PredictionService {
                     prepared.put(item.stationId(), existing.withInference(result));
                 }
             }
-            return new Batch(requestId, stationIds.stream().map(id ->
-                    new StationPrediction(id, profile, "ARRIVAL_ETA", prepared.get(id))).toList());
+            var results = stationIds.stream().map(id ->
+                    new StationPrediction(id, profile, "ARRIVAL_ETA", prepared.get(id))).toList();
+            recordSamples(results, candidates);
+            return new Batch(requestId, results);
         } finally {
             activeBatches.release();
+        }
+    }
+
+    private void recordSamples(List<StationPrediction> results, Map<String, EtaHistoryRepository.Candidate> candidates) {
+        if (quality == null) {
+            return;
+        }
+        Instant readyAt = clock.instant().truncatedTo(ChronoUnit.MILLIS);
+        var samples = results.stream()
+                .filter(item -> "OK".equals(item.prediction().status()) && item.prediction().probability() != null
+                        && !readyAt.isBefore(item.prediction().requestAt())
+                        && readyAt.isBefore(item.prediction().requestedArrivalAt()))
+                .map(item -> {
+                    var prediction = item.prediction();
+                    var chargers = candidates.get(item.stationId()).inventory().keySet().stream().sorted().toList();
+                    return new PredictionQualityRepository.Sample(item.stationId(), item.profile(), prediction.modelVersion(),
+                            prediction.featureVersion(), readyAt, prediction.requestedArrivalAt(),
+                            prediction.forecastAt(), prediction.probability(), chargers);
+                }).toList();
+        if (!samples.isEmpty()) {
+            quality.enqueue(samples);
         }
     }
 

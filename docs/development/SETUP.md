@@ -96,7 +96,7 @@ export SERVER_PORT=8080
 ./mvnw spring-boot:run
 ```
 
-첫 실행에서 Flyway가 현재 저장소의 V1–V10 마이그레이션을 실행합니다. 테이블이 만들어지고 로그에 `Tomcat started on port 8080`과 `Started WattUpApplication`이 표시되면 서버가 준비된 상태입니다. 중지는 해당 터미널에서 `Ctrl+C`를 사용합니다.
+첫 실행에서 Flyway가 저장소에 포함된 마이그레이션을 실행합니다. 테이블이 만들어지고 로그에 `Tomcat started on port 8080`과 `Started WattUpApplication`이 표시되면 서버가 준비된 상태입니다. 중지는 해당 터미널에서 `Ctrl+C`를 사용합니다.
 
 ## 5. Swagger와 서버 확인
 
@@ -123,6 +123,7 @@ curl --fail-with-body 'http://127.0.0.1:8080/api/charging-stations?latitude=35.8
 | 공단 요청 설정 | `WATTUP_KECO_PAGE_SIZE`, `WATTUP_KECO_DAILY_LIMIT` | 기본값은 각각 `9999`, `1000`입니다. 승인된 요청 한도에 맞춥니다. |
 | 경로·장소 검색 | `WATTUP_KAKAO_REST_API_KEY`, `WATTUP_KAKAO_LOCAL_REST_API_KEY` | 각각 카카오모빌리티 자동차 경로와 카카오 로컬 검색에 사용합니다. |
 | ETA 예측 | `WATTUP_AI_ETA_BATCH_URL`, `WATTUP_AI_ETA_BEARER_TOKEN` | FastAPI 배치 전체 URL과 서버에서 인증을 요구할 경우 토큰을 설정합니다. 도착 예측에는 카카오 경로 키와 수집 이력도 필요합니다. |
+| ETA 예측 품질 | `WATTUP_PREDICTION_QUALITY_CAPTURE_ENABLED` | 기본값 `false`. `true`로 설정하면 앞으로 검증되는 예측의 평가 표본을 저장합니다. |
 | 추천 후보 수 | `WATTUP_RECOMMENDATION_CANDIDATE_LIMIT` | 기본값 `10`, 범위 `1–30`입니다. |
 | 회원 토큰 | `WATTUP_AUTH_JWT_SECRET` | 무작위 32바이트 이상의 값을 Base64로 인코딩합니다. |
 | 카카오·Google 로그인 | `WATTUP_AUTH_KAKAO_APP_ID`, `WATTUP_AUTH_GOOGLE_CLIENT_ID` | 사용하는 소셜 공급자의 앱 ID 또는 OAuth 클라이언트 ID를 설정합니다. 가입을 검증하려면 최신 필수 약관도 DB에 등록합니다. |
