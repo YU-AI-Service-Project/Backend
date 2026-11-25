@@ -132,3 +132,13 @@ Spring Boot는 수집이 완료된 MySQL 이력으로 30분 특징을 만들고,
 | `WATTUP_AUTH_KAKAO_ADMIN_KEY` | WattUp 로그인에 사용한 카카오 앱의 관리자 키. 카카오 연결 해제와 카카오 연결 계정의 탈퇴에 필요하다. |
 
 탈퇴는 개인정보가 제거된 상태 행을 남기고, 계정에 연결된 자격 증명·세션·티켓·동의 이력·즐겨찾기·검색 설정을 삭제한다. 카카오 연결이 있으면 카카오 API의 연결 해제 성공 또는 이미 해제된 응답을 확인한 뒤 로컬 삭제를 완료한다. 외부 해제 성공 뒤 저장에 실패하면 티켓이 유효한 동안 같은 요청으로 재시도할 수 있다. Google OAuth 권한 철회에는 Google 액세스 토큰이나 갱신 토큰이 필요하다. 현재 ID 토큰 기반 서버는 WattUp 계정에 기록된 Google 연결을 해제한다. [카카오 탈퇴 절차](https://developers.kakao.com/docs/ko/kakaologin/common#unlink) · [Google OAuth 권한 철회](https://developers.google.com/identity/protocols/oauth2/web-server#tokenrevoke)
+
+## 즐겨찾기·검색 설정
+
+- `/api/users/me/favorites`는 Bearer 인증이 필요하다. 목록의 `page`는 0부터 시작하며, `size`는 기본 20이고 최대 100이다. 이미 등록한 충전소는 `409 FAVORITE_ALREADY_EXISTS`, 반복 삭제는 `204`를 반환한다. 충전소가 비공개 또는 삭제 상태로 바뀌면 목록에 `UNAVAILABLE`을 표시한다.
+- `POST /api/users/me/favorites/import`는 사용자가 동의한 로컬 즐겨찾기 목록을 `MERGE`로 가져온다. 한 요청은 최대 100개다. 기존 등록 건과 요청 내 유효한 중복은 `alreadyExisted`에 집계한다. 새로 추가할 수 없는 충전소는 `invalid`로 집계한다.
+- `/api/users/me/preferences`는 기본 반경 3000m와 프로필 `ALL`을 제공한다. `PATCH`는 받은 필드만 갱신한다. `null`은 `minOutputKw`와 `defaultChargerTypeCodes`의 제한을 해제한다. 저장된 충전기 유형은 프로필과 호환되어야 한다.
+
+## 장소·주소 조회
+
+`WATTUP_KAKAO_LOCAL_REST_API_KEY`에 서버용 카카오 로컬 REST 키를 설정한다. `GET /api/locations/search`는 1–100자의 검색어에 대해 키워드 결과를 반환하고 빈 자리를 주소 결과로 보완한다. `limit`의 기본값은 5, 범위는 1–15다. `GET /api/locations/reverse-geocode`는 WGS84 좌표의 도로명·지번 주소를 반환한다. 주소를 확인할 수 없는 경우에도 요청 좌표와 `선택한 위치`를 반환한다. 비회원도 두 API를 사용할 수 있다. [카카오 로컬 REST API](https://developers.kakao.com/docs/ko/local/dev-guide)
