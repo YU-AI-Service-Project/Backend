@@ -1,21 +1,39 @@
 package dev.wattup.backend.prediction;
 
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
 import dev.wattup.backend.WattUpApplication;
 import dev.wattup.backend.station.ChargerProfile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
+import tools.jackson.databind.json.JsonMapper;
 
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -23,6 +41,127 @@ import static org.assertj.core.api.Assertions.assertThat;
 class EtaHistoryTests {
     private static final LocalDateTime GRID_END = LocalDateTime.parse("2026-11-12T01:00:00");
     private static final Instant AS_OF = GRID_END.toInstant(ZoneOffset.UTC);
+
+    @Test
+    void servesCurrentStatusAndValidatedEtaTogetherAndKeepsCurrentStatusOnAiFailure() throws Exception {
+        String url = System.getenv("WATTUP_TEST_DB_URL");
+        if (!url.matches("jdbc:mysql://[^/?#]+/wattup_test(?:\\?[^#]*)?")) {
+            throw new IllegalArgumentException("WATTUP_TEST_DB_URL must point to wattup_test");
+        }
+        String station = "KECO:FLOW" + UUID.randomUUID().toString().substring(0, 8);
+        String region = "XF";
+        Instant now = Instant.now();
+        Instant grid = Instant.ofEpochSecond(Math.floorDiv(now.getEpochSecond(), 300) * 300);
+        var localGrid = LocalDateTime.ofInstant(grid, ZoneOffset.UTC);
+        var json = new JsonMapper();
+        var invalidForecast = new AtomicBoolean();
+        var upstream = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        upstream.createContext("/route", exchange -> respond(exchange, json, Map.of("routes", List.of(
+                Map.of("result_code", 0, "summary", Map.of("duration", 600, "distance", 1800))))));
+        upstream.createContext("/arrival", exchange -> {
+            var batch = json.readTree(exchange.getRequestBody());
+            var item = batch.path("items").get(0);
+            if (batch.path("items").size() != 1 || !station.equals(item.path("stationId").asText())
+                    || !"daegu-eta-v4".equals(batch.path("featureVersion").asText())
+                    || item.path("features").path("availableLag30").asInt() != 1) {
+                respond(exchange, json, Map.of("invalidRequest", true));
+                return;
+            }
+            var forecast = grid.plusSeconds(invalidForecast.get() ? 900 : 600);
+            respond(exchange, json, Map.of("requestId", batch.path("requestId"), "items", List.of(Map.ofEntries(
+                    Map.entry("requestItemId", item.path("requestItemId")), Map.entry("stationId", station),
+                    Map.entry("profile", "AC_SLOW"), Map.entry("status", "OK"), Map.entry("probability", 0.82),
+                    Map.entry("modelVersion", "fixture-model"), Map.entry("featureVersion", "daegu-eta-v4"),
+                    Map.entry("etaSeconds", 600), Map.entry("roadDistanceM", 1800), Map.entry("horizonMinutes", 10),
+                    Map.entry("asOf", grid.toString()), Map.entry("requestAt", grid.toString()),
+                    Map.entry("requestedArrivalAt", grid.plusSeconds(600).toString()),
+                    Map.entry("forecastAt", forecast.toString()), Map.entry("featureAgeSeconds", 0),
+                    Map.entry("forecastRoundingSeconds", 0)))));
+        });
+        upstream.start();
+        String base = "http://127.0.0.1:" + upstream.getAddress().getPort();
+        try (var app = new SpringApplicationBuilder(WattUpApplication.class, RouteFixture.class).run(
+                "--spring.datasource.url=" + url, "--wattup.collection.enabled=false", "--server.port=0",
+                "--server.address=127.0.0.1", "--wattup.prediction.ai-batch-url=" + base + "/arrival",
+                "--wattup.prediction.ai-bearer-token=fixture", "--wattup.prediction.kakao-rest-api-key=",
+                "--test.route-url=" + base + "/route", "--test.prediction-time=" + grid);
+             var http = HttpClient.newHttpClient()) {
+            var jdbc = app.getBean(JdbcTemplate.class);
+            var runs = new ArrayList<Long>();
+            try {
+                new TransactionTemplate(app.getBean(PlatformTransactionManager.class)).executeWithoutResult(tx -> {
+                    jdbc.update("INSERT INTO charging_stations (station_id,source_station_id,station_name,latitude,longitude)"
+                            + " VALUES (?,?,'Flow fixture',33.99117,127.22481)", station, station.substring(5));
+                    jdbc.update("INSERT INTO chargers (station_id,source_charger_id,charger_type_code,output_kw,inventory_region)"
+                            + " VALUES (?,'01','02',7,?)", station, region);
+                    long charger = jdbc.queryForObject("SELECT charger_id FROM chargers WHERE station_id=?", Long.class, station);
+                    long full = run(jdbc, "STATUS_FULL", region, localGrid.minusMinutes(30), 0, true);
+                    runs.add(full);
+                    observe(jdbc, charger, full, "2", "AVAILABLE", localGrid.minusMinutes(30));
+                    for (int sample = 0; sample < 7; sample++) {
+                        runs.add(run(jdbc, "STATUS_DELTA", region, localGrid.minusMinutes(30 - sample * 5), 0, true));
+                    }
+                    jdbc.update("""
+                            INSERT INTO charger_current_status (charger_id,latest_observation_id,raw_status_code,
+                              normalized_status,last_observed_at)
+                            SELECT charger_id,observation_id,'2','AVAILABLE',? FROM charger_status_observations
+                            WHERE charger_id=? AND collection_run_id=?
+                            """, localGrid, charger, full);
+                });
+                int port = app.getEnvironment().getRequiredProperty("local.server.port", Integer.class);
+                var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port
+                        + "/api/recommendations?latitude=33.99117&longitude=127.22481&radiusM=100&profile=AC_SLOW"))
+                        .timeout(Duration.ofSeconds(10)).GET().build();
+                for (boolean malformed : new boolean[]{false, true}) {
+                    invalidForecast.set(malformed);
+                    var response = http.send(request, HttpResponse.BodyHandlers.ofString());
+                    assertThat(response.statusCode()).isEqualTo(200);
+                    var result = json.readTree(response.body());
+                    var item = result.path("items").get(0);
+                    assertThat(item.path("stationId").asText()).isEqualTo(station);
+                    assertThat(item.path("current").path("freshAvailableCount").asInt()).isEqualTo(1);
+                    assertThat(item.path("etaSeconds").asInt()).isEqualTo(600);
+                    assertThat(item.path("prediction").path("status").asText())
+                            .isEqualTo(malformed ? "MODEL_UNAVAILABLE" : "OK");
+                    if (malformed) {
+                        assertThat(item.path("prediction").path("probability").isNull()).isTrue();
+                        assertThat(result.path("rankingBasis").asText()).isEqualTo("DISTANCE_CURRENT_STATUS_OUTPUT");
+                    } else {
+                        assertThat(item.path("prediction").path("probability").asDouble()).isEqualTo(0.82);
+                        assertThat(result.path("rankingBasis").asText()).isEqualTo("DISTANCE_CURRENT_STATUS_OUTPUT_PREDICTION");
+                    }
+                }
+            } finally {
+                jdbc.update("DELETE cs FROM charger_current_status cs JOIN chargers c USING (charger_id) WHERE c.station_id=?", station);
+                jdbc.update("DELETE o FROM charger_status_observations o JOIN chargers c USING (charger_id) WHERE c.station_id=?", station);
+                jdbc.update("DELETE FROM chargers WHERE station_id=?", station);
+                jdbc.update("DELETE FROM charging_stations WHERE station_id=?", station);
+                runs.forEach(run -> jdbc.update("DELETE FROM collection_runs WHERE run_id=?", run));
+            }
+        } finally {
+            upstream.stop(0);
+        }
+    }
+
+    private static void respond(HttpExchange exchange, JsonMapper json, Object body) throws IOException {
+        try (exchange) {
+            byte[] payload = json.writeValueAsBytes(body);
+            exchange.sendResponseHeaders(200, payload.length);
+            exchange.getResponseBody().write(payload);
+        }
+    }
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class RouteFixture {
+        @Bean
+        @Primary
+        PredictionService loopbackPrediction(EtaHistoryRepository history, EtaBatchClient ai, JsonMapper json,
+                @Value("${test.route-url}") URI route, @Value("${test.prediction-time}") String time) {
+            var clock = Clock.fixed(Instant.parse(time), ZoneOffset.UTC);
+            var routes = new KakaoRouteClient(HttpClient.newHttpClient(), json, route, "fixture", Duration.ofSeconds(2), clock);
+            return new PredictionService(history, routes, ai, clock);
+        }
+    }
 
     @Test
     void readsOnlyCompleteCausalHistoryForTheStationRegion() {
