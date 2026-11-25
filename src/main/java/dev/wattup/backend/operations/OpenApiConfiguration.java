@@ -3,6 +3,7 @@ package dev.wattup.backend.operations;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.Operation;
 import io.swagger.v3.oas.models.info.Info;
+import io.swagger.v3.oas.models.responses.ApiResponse;
 import io.swagger.v3.oas.models.security.SecurityRequirement;
 import io.swagger.v3.oas.models.security.SecurityScheme;
 import org.springdoc.core.customizers.OpenApiCustomizer;
@@ -55,6 +56,10 @@ class OpenApiConfiguration {
                 };
                 if (status != null) {
                     successStatus(operation, status);
+                }
+                if (operation.getRequestBody() != null) {
+                    operation.getResponses().addApiResponse("413", new ApiResponse()
+                            .description("Request body exceeds the configured size"));
                 }
             }));
         };

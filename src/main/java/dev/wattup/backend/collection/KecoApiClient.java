@@ -68,7 +68,8 @@ final class KecoApiClient {
     }
 
     private HttpResponse<String> send(HttpRequest request) {
-        var pending = http.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        var pending = http.sendAsync(request, HttpResponse.BodyHandlers.limiting(
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), 32 * 1024 * 1024));
         try {
             return pending.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {

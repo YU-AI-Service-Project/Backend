@@ -21,6 +21,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.io.ByteArrayInputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -107,15 +108,74 @@ class AuthApiTests {
                 db.update("DELETE FROM auth_action_tickets WHERE provider_user_id = ? OR email LIKE ?", fixture,
                         "%." + fixture.toLowerCase(java.util.Locale.ROOT) + "@example.test");
                 db.update("DELETE FROM agreement_policies WHERE policy_version = ?", fixture);
+                var rate = application.getBean(AuthRateLimit.class);
                 db.update("DELETE FROM auth_request_buckets WHERE bucket_key IN (?,?,?)",
-                        AuthValues.hash("signup-ip|127.0.0.1"), AuthValues.hash("social-ip|127.0.0.1"),
-                        AuthValues.hash("refresh-ip|127.0.0.1"));
+                        rate.key("signup-ip", "127.0.0.1"), rate.key("social-ip", "127.0.0.1"),
+                        rate.key("refresh-ip", "127.0.0.1"));
             }
         } finally {
             if (application != null) {
                 application.close();
             }
             http.close();
+        }
+    }
+
+    @Test
+    void publicAuthResponsesAreNeverCacheableAndOversizedChunkedJsonIsRejected() throws Exception {
+        var response = http.send(HttpRequest.newBuilder(local("/api/auth/agreements")).GET().build(),
+                HttpResponse.BodyHandlers.discarding());
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.headers().firstValue("Cache-Control").orElse("")).contains("no-store");
+        assertThat(response.headers().firstValue("X-Content-Type-Options")).hasValue("nosniff");
+
+        byte[] payload = ("{\"stationIds\":[\"" + "a".repeat(70_000) + "\"]}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        var oversized = http.send(HttpRequest.newBuilder(local("/api/predictions/batch"))
+                .version(HttpClient.Version.HTTP_1_1).header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofInputStream(() -> new ByteArrayInputStream(payload))).build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(oversized.statusCode()).isEqualTo(413);
+        assertThat(json.readTree(oversized.body()).path("error").path("code").asText()).isEqualTo("REQUEST_TOO_LARGE");
+        byte[] form = ("query=" + "a".repeat(70_000)).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        var oversizedForm = http.send(HttpRequest.newBuilder(local("/api/recommendations"))
+                .version(HttpClient.Version.HTTP_1_1).header("Content-Type", "application/x-www-form-urlencoded")
+                .method("PATCH", HttpRequest.BodyPublishers.ofInputStream(() -> new ByteArrayInputStream(form))).build(),
+                HttpResponse.BodyHandlers.discarding());
+        assertThat(oversizedForm.statusCode()).isEqualTo(413);
+    }
+
+    @Test
+    void rechecksSessionUnderTheLockBeforeRevokingOtherSessions() {
+        var member = account("authority");
+        var service = application.getBean(AuthSessions.class);
+        var acceptedAccess = service.authenticate(member.tokens.accessToken());
+        service.logout(acceptedAccess, member.tokens.refreshToken());
+        var newSession = service.start(member.id, null);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.logoutAll(acceptedAccess))
+                .isInstanceOfSatisfying(AuthFailure.class, failure -> assertThat(failure.code).isEqualTo("UNAUTHORIZED"));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> application.getBean(AuthEmail.class)
+                .change(acceptedAccess, PASSWORD, CHANGED))
+                .isInstanceOfSatisfying(AuthFailure.class, failure -> assertThat(failure.code).isEqualTo("UNAUTHORIZED"));
+        assertThat(service.authenticate(newSession.accessToken()).getSubject()).isEqualTo(Long.toString(member.id));
+    }
+
+    @Test
+    void removesExpiredRateLimitBucketsAndKeepsActiveWindows() {
+        var rate = application.getBean(AuthRateLimit.class);
+        String expired = rate.key("expired", fixture);
+        String active = rate.key("active", fixture);
+        assertThat(expired).isNotEqualTo(AuthValues.hash("expired|" + fixture));
+        assertThat(active).isNotEqualTo(expired);
+        db.update("""
+                INSERT INTO auth_request_buckets (bucket_key,window_started_at,hit_count)
+                VALUES (?,UTC_TIMESTAMP(3) - INTERVAL 3 HOUR,1),(?,UTC_TIMESTAMP(3),1)
+                """, expired, active);
+        try {
+            rate.removeExpired();
+            assertThat(db.queryForList("SELECT bucket_key FROM auth_request_buckets WHERE bucket_key IN (?,?)",
+                    String.class, expired, active)).containsExactly(active);
+        } finally {
+            db.update("DELETE FROM auth_request_buckets WHERE bucket_key IN (?,?)", expired, active);
         }
     }
 
@@ -238,7 +298,8 @@ class AuthApiTests {
         assertThat(created.path("user").path("providers").size()).isZero();
         send("POST", "/api/auth/signup/email", signup, null, 410);
 
-        db.update("DELETE FROM auth_request_buckets WHERE bucket_key = ?", AuthValues.hash("verification-email|" + email));
+        db.update("DELETE FROM auth_request_buckets WHERE bucket_key = ?",
+                application.getBean(AuthRateLimit.class).key("verification-email", email));
         assertThat(codes.remove(email)).isEqualTo(code);
         send("POST", "/api/auth/email/verifications", request, null, 202);
         assertThat(codes).doesNotContainKey(email);
@@ -259,7 +320,8 @@ class AuthApiTests {
         assertThat(known).isEqualTo(missing);
         assertThat(resetTokens).containsKey(email).doesNotContainKey(address("missing"));
         String earlierReset = resetTokens.get(email);
-        db.update("DELETE FROM auth_request_buckets WHERE bucket_key = ?", AuthValues.hash("reset-email|" + email));
+        db.update("DELETE FROM auth_request_buckets WHERE bucket_key = ?",
+                application.getBean(AuthRateLimit.class).key("reset-email", email));
         send("POST", "/api/auth/password-resets", Map.of("email", email), null, 202);
         String newerReset = resetTokens.get(email);
         assertThat(newerReset).isNotEqualTo(earlierReset);

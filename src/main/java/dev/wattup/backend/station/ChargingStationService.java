@@ -10,7 +10,7 @@ import java.util.List;
 import static dev.wattup.backend.station.StationViews.*;
 
 @Service
-@Transactional(readOnly = true)
+@Transactional(readOnly = true, timeout = 4)
 class ChargingStationService {
     private static final Duration STATUS_MAX_AGE = Duration.ofMinutes(10);
     private final ChargingStationRepository stations;

@@ -67,8 +67,9 @@ class AppSupportApiTests {
                 }
                 for (long id : users) {
                     db.update("DELETE FROM users WHERE user_id=?", id);
+                    var rate = application.getBean(AuthRateLimit.class);
                     db.update("DELETE FROM auth_request_buckets WHERE bucket_key IN (?,?)",
-                            AuthValues.hash("support-report|" + id), AuthValues.hash("reauth|" + id));
+                            rate.key("support-report", Long.toString(id)), rate.key("reauth", Long.toString(id)));
                 }
                 db.update("DELETE FROM charging_stations WHERE source_station_id LIKE ?", fixture + "%");
             }

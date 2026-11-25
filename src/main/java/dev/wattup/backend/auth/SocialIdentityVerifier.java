@@ -6,7 +6,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.stereotype.Component;
@@ -17,6 +17,7 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.net.http.HttpClient;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -81,7 +82,11 @@ class SocialIdentityVerifier {
         var headers = new HttpHeaders();
         headers.setBearerAuth(token);
         try {
-            String body = http.exchange(KAKAO + path, HttpMethod.GET, new HttpEntity<>(headers), String.class).getBody();
+            var response = http.exchange(KAKAO + path, HttpMethod.GET, new HttpEntity<>(headers), String.class);
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new Failure(true);
+            }
+            String body = response.getBody();
             JsonNode parsed = body == null ? null : json.readTree(body);
             if (parsed == null || !parsed.isObject()) {
                 throw new Failure(true);
@@ -141,10 +146,14 @@ class SocialIdentityVerifier {
     }
 
     static RestTemplate client() {
-        var requests = new SimpleClientHttpRequestFactory();
-        requests.setConnectTimeout(Duration.ofSeconds(2));
+        var client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2))
+                .followRedirects(HttpClient.Redirect.NEVER).build();
+        var requests = new JdkClientHttpRequestFactory(client);
         requests.setReadTimeout(Duration.ofSeconds(3));
-        return new RestTemplate(requests);
+        var template = new RestTemplate(requests);
+        template.getInterceptors().add((request, body, execution) ->
+                new ProviderResponseLimit(execution.execute(request, body)));
+        return template;
     }
 
     record Identity(String provider, String subject, String email, String nickname, String profileImageUrl) {

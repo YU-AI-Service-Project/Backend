@@ -16,9 +16,22 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class EtaBatchClientTests {
     private final JsonMapper json = new JsonMapper();
+
+    @Test
+    void requiresTlsForNonLocalEndpointsThatReceiveTokens() {
+        assertThat(PredictionConfiguration.serviceEndpoint("https://model.example.test/predict", "test-token"))
+                .isEqualTo(URI.create("https://model.example.test/predict"));
+        assertThat(PredictionConfiguration.serviceEndpoint("http://127.0.0.1:9999/health", "test-token"))
+                .isEqualTo(URI.create("http://127.0.0.1:9999/health"));
+        assertThat(PredictionConfiguration.serviceEndpoint("http://[::1]:9999/health", "test-token"))
+                .isEqualTo(URI.create("http://[::1]:9999/health"));
+        assertThatThrownBy(() -> PredictionConfiguration.serviceEndpoint("http://model.example.test/predict", "test-token"))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("HTTPS");
+    }
 
     @Test
     void retriesTransientFailureAndMatchesResultsByRequestItemId() throws Exception {

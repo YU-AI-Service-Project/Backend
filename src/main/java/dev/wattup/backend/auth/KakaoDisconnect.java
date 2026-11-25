@@ -42,8 +42,11 @@ class KakaoDisconnect {
         body.add("target_id_type", "user_id");
         body.add("target_id", subject);
         try {
-            String response = http.postForObject(ENDPOINT, new HttpEntity<>(body, headers), String.class);
-            var parsed = response == null ? null : json.readTree(response);
+            var response = http.postForEntity(ENDPOINT, new HttpEntity<>(body, headers), String.class);
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw unavailable();
+            }
+            var parsed = response.getBody() == null ? null : json.readTree(response.getBody());
             if (parsed == null || !parsed.path("id").isIntegralNumber() || !subject.equals(parsed.path("id").asText())) {
                 throw unavailable();
             }
