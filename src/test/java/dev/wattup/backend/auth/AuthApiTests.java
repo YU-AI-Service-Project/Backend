@@ -459,6 +459,98 @@ class AuthApiTests {
         send("DELETE", "/api/users/me/social-accounts/kakao", Map.of("reauthenticationToken", unlink), access, 204);
     }
 
+    @Test
+    void favoritesAreAccountScopedAndImportIsIdempotent() throws Exception {
+        var first = account("favorites");
+        var second = account("otherfav");
+        String access = first.tokens.accessToken();
+        String visible = "KECO:" + fixture + "V";
+        String added = "KECO:" + fixture + "A";
+        for (String station : List.of(visible, added)) {
+            db.update("INSERT INTO charging_stations (station_id,source_station_id,station_name) VALUES (?,?,'Test station')",
+                    station, station.substring(5));
+        }
+        try {
+            String base = "/api/users/me/favorites";
+            send("GET", base, null, null, 401);
+            send("POST", base, Map.of("stationId", visible), access, 201);
+            assertCode(send("POST", base, Map.of("stationId", visible), access, 409), "FAVORITE_ALREADY_EXISTS");
+            assertThat(send("GET", base, null, second.tokens.accessToken(), 200).path("total").asInt()).isZero();
+            send("DELETE", base + "/" + visible, null, second.tokens.accessToken(), 204);
+
+            var body = Map.of("stationIds", List.of(visible, added, added, "invalid", "KECO:NOT_FOUND"), "mergeMode", "MERGE");
+            var imported = send("POST", base + "/import", body, access, 200);
+            assertThat(imported.path("imported").asInt()).isEqualTo(1);
+            assertThat(imported.path("alreadyExisted").asInt()).isEqualTo(2);
+            assertThat(imported.path("invalid").asInt()).isEqualTo(2);
+            assertThat(send("POST", base + "/import", body, access, 200).path("imported").asInt()).isZero();
+            var page = send("GET", base + "?page=0&size=1", null, access, 200);
+            assertThat(page.path("total").asInt()).isEqualTo(2);
+            assertThat(page.path("hasNext").asBoolean()).isTrue();
+            assertThat(page.path("items").get(0).path("current").path("freshness").asText()).isEqualTo("UNKNOWN");
+            assertThat(send("GET", base + "?page=9&size=1", null, access, 200).path("total").asInt()).isEqualTo(2);
+            db.update("UPDATE charging_stations SET source_limited=TRUE WHERE station_id=?", visible);
+            assertCode(send("POST", base, Map.of("stationId", visible), second.tokens.accessToken(), 404), "STATION_NOT_FOUND");
+            assertThat(send("POST", base + "/import", Map.of("stationIds", List.of(visible), "mergeMode", "MERGE"),
+                    access, 200).path("alreadyExisted").asInt()).isEqualTo(1);
+            assertThat(send("POST", base + "/import", Map.of("stationIds", java.util.Arrays.asList(visible, null),
+                    "mergeMode", "MERGE"), access, 200).path("invalid").asInt()).isEqualTo(1);
+            assertThat(send("POST", base + "/import", Map.of("stationIds", List.of(visible), "mergeMode", "MERGE"),
+                    second.tokens.accessToken(), 200).path("invalid").asInt()).isEqualTo(1);
+            var hidden = send("GET", base, null, access, 200).path("items").valueStream()
+                    .filter(item -> visible.equals(item.path("stationId").asText())).findFirst().orElseThrow();
+            assertThat(hidden.path("status").asText()).isEqualTo("UNAVAILABLE");
+            assertThat(hidden.path("name").isNull()).isTrue();
+            assertThat(hidden.path("current").isNull()).isTrue();
+            send("DELETE", base + "/" + visible, null, access, 204);
+            send("DELETE", base + "/" + visible, null, access, 204);
+            assertThat(send("GET", base, null, access, 200).path("total").asInt()).isEqualTo(1);
+        } finally {
+            db.update("DELETE FROM user_favorites WHERE user_id IN (?,?)", first.id, second.id);
+            db.update("DELETE FROM charging_stations WHERE station_id IN (?,?)", visible, added);
+        }
+    }
+
+    @Test
+    void preferencesPatchOnlyChangesSuppliedFieldsAndProtectsOtherAccounts() throws Exception {
+        var first = account("preferences");
+        var second = account("otherpref");
+        String access = first.tokens.accessToken();
+        String path = "/api/users/me/preferences";
+        var defaults = send("GET", path, null, access, 200);
+        assertThat(defaults.path("defaultRadiusM").asInt()).isEqualTo(3000);
+        assertThat(defaults.path("defaultProfile").asText()).isEqualTo("ALL");
+        var updated = send("PATCH", path, Map.of("defaultRadiusM", 5500, "defaultProfile", "DC_COMBO",
+                "minOutputKw", 50, "defaultChargerTypeCodes", List.of("04", "06")), access, 200);
+        assertThat(updated.path("minOutputKw").asDouble()).isEqualTo(50);
+        assertThat(updated.path("defaultChargerTypeCodes").size()).isEqualTo(2);
+        assertCode(send("PATCH", path, Map.of("defaultProfile", "AC_SLOW"), access, 422), "UNSUPPORTED_CHARGER_FILTER");
+        assertCode(send("PATCH", path, Map.of("defaultRadiusM", 99), access, 400), "INVALID_RADIUS");
+        assertCode(send("PATCH", path, Map.of("defaultProfile", "unknown"), access, 422), "UNSUPPORTED_PROFILE");
+        assertCode(send("PATCH", path, Map.of("minOutputKw", 0.001), access, 400), "INVALID_REQUEST");
+        assertCode(send("PATCH", path, Map.of("userId", second.id), access, 400), "INVALID_REQUEST");
+        var clearing = new java.util.HashMap<String, Object>();
+        clearing.put("minOutputKw", null);
+        clearing.put("defaultChargerTypeCodes", null);
+        var cleared = send("PATCH", path, clearing, access, 200);
+        assertThat(cleared.path("minOutputKw").isNull()).isTrue();
+        assertThat(cleared.path("defaultChargerTypeCodes").size()).isZero();
+        assertThat(cleared.path("defaultRadiusM").asInt()).isEqualTo(5500);
+        assertThat(cleared.path("defaultProfile").asText()).isEqualTo("DC_COMBO");
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var radius = executor.submit(() -> send("PATCH", path, Map.of("defaultRadiusM", 6200), access, 200));
+            var output = executor.submit(() -> send("PATCH", path, Map.of("minOutputKw", 80), access, 200));
+            radius.get();
+            output.get();
+        }
+        var combined = send("GET", path, null, access, 200);
+        assertThat(combined.path("defaultRadiusM").asInt()).isEqualTo(6200);
+        assertThat(combined.path("minOutputKw").asInt()).isEqualTo(80);
+        var separate = send("GET", path, null, second.tokens.accessToken(), 200);
+        assertThat(separate.path("defaultRadiusM").asInt()).isEqualTo(3000);
+        assertThat(separate.path("defaultProfile").asText()).isEqualTo("ALL");
+    }
+
     private Member account(String tag) {
         String nickname = fixture + tag;
         db.update("INSERT INTO users (nickname) VALUES (?)", nickname);

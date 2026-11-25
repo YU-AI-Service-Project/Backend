@@ -9,7 +9,8 @@
 - 완료 범주 C · 비회원 단건·배치 도착 예측과 Spring Boot 클라이언트. PR [#5](https://github.com/YU-AI-Service-Project/Backend/pull/5)를 `388e5bd`로 Squash Merge했다. 실제 FastAPI·카카오 연동은 별도 검증 대상이다.
 - 완료 범주 D · 서버 Top-3 추천과 Android용 통합 응답. PR [#6](https://github.com/YU-AI-Service-Project/Backend/pull/6)을 `a3fcb9c`로 Squash Merge했다.
 - 완료 범주 E · 소셜 로그인, 약관, 토큰·세션, 이메일 가입·비밀번호 API 14개. PR [#7](https://github.com/YU-AI-Service-Project/Backend/pull/7)을 `a245d73`으로 Squash Merge했다.
-- 현재 범주 F · `feat/account-management`. 내 계정·탈퇴 API 11개를 구현했다. [GitHub PR 검색](https://github.com/YU-AI-Service-Project/Backend/pulls?q=is%3Apr+head%3Afeat%2Faccount-management)
+- 완료 범주 F · 내 계정·탈퇴 API 11개. PR [#8](https://github.com/YU-AI-Service-Project/Backend/pull/8)을 `22b72f5`로 Squash Merge했다.
+- 현재 범주 G · `feat/personalization`. 즐겨찾기·검색 설정·장소 주소 조회 API 8개를 구현했다. [GitHub PR 검색](https://github.com/YU-AI-Service-Project/Backend/pulls?q=is%3Apr+head%3Afeat%2Fpersonalization)
 - 범주 A는 수집 내부 서비스에 집중한다. 관리자 HTTP 49–51은 인증·운영 정책과 함께 H에서 제공한다. 공단 실연동은 인증키와 실호출 승인 후 검증한다.
 - FastAPI 추론 경로 47·48의 소유자는 AI 서버다. Spring Boot는 계약 및 호출 클라이언트를 담당한다. 52번 AI 연결 상태는 Spring Boot 소유다.
 - 각 범주의 CI와 병합 상태는 해당 PR을 기준으로 기록한다.
@@ -64,7 +65,15 @@
 - 탈퇴는 시작 설정에서 비활성화한다. 적용 시 상태 기록을 남기고 기존 세션·자격 증명·연결·티켓·동의 이력·개인 설정을 삭제한다. 운영 정책은 배포 전에 확정한다.
 - 카카오 연결 해제는 관리자 키로 요청한다. 테스트 대역에서 외부 실패 시 로컬 상태 유지, 외부 성공 뒤 로컬 롤백과 재시도, 동시 로그인·연결 요청 차단을 확인한다. 재시도의 기존 티켓이 만료되면 다시 재인증해야 한다. Google OAuth 권한 철회는 앱에서 사용할 권한 및 토큰 종류를 팀이 확정해야 한다.
 - Java 25·MySQL 8.4에서 `mvnw.cmd clean verify` 전체 68개 통과, 실패·건너뜀 0개. 실제 카카오 앱의 연결 해제와 Android 실기기 동작은 별도 확인이 필요하다.
-- 다음 범주는 G의 즐겨찾기·개인 설정과 장소 검색이다.
+- [PR CI](https://github.com/YU-AI-Service-Project/Backend/actions/runs/45437024228)에서 V1–V8 적용과 테스트 68개 통과를 확인했다.
+
+## 범주 G 검증과 인계
+
+- 명세 39–44번은 JWT에서 확인한 계정에만 적용한다. V6의 즐겨찾기·개인 설정 테이블을 재사용한다. 즐겨찾기 추가·삭제·병합 시 현재 세션과 사용자 행을 잠가 중복 삽입과 탈퇴 후 쓰기를 방지한다.
+- 화면 명세서의 수동 위치 검색에서 필요한 도로명·지번·장소명을 제공한다. 지도 표시·터치·GPS 기준점 이동은 Android의 지도 기능을 사용한다. 주소를 찾을 수 없거나 로컬 API가 실패하면 역지오코딩은 원래 위치를 반환한다. [카카오 로컬 REST API](https://developers.kakao.com/docs/ko/local/dev-guide)
+- HTTP/MySQL에서 사용자 격리, 중복·반복 가져오기, 비공개 충전소, 페이지, 설정의 부분 수정과 프로필 호환을 검증한다. 카카오 계약과 실패 처리는 루프백에서 검증한다. 실제 카카오 로컬 키와 Android 화면 연동은 운영 검증 대상이다.
+- Java 25·MySQL 8.4에서 `mvnw.cmd clean verify` 전체 75개 통과, 실패·건너뜀 0개. 서로 다른 설정 필드의 동시 수정도 확인했다.
+- 다음 범주는 H의 분석·공지·신고·내부 운영 API와 52개 최종 대조다.
 
 ## API 52개 추적표
 
@@ -79,8 +88,8 @@
 | 5 | `GET /api/charging-stations/{stationId}/prediction` | 충전소 단건 예측 | 핵심 | C | ETA 구현 · 실연동 대기 | [Controller](../../src/main/java/dev/wattup/backend/prediction/PredictionController.java) · [HTTP 테스트](../../src/test/java/dev/wattup/backend/prediction/PredictionApiTests.java) |
 | 6 | `POST /api/predictions/batch` | 지도/목록용 다중 충전소 예측 | 핵심 | C | ETA 구현 · 실연동 대기 | [Controller](../../src/main/java/dev/wattup/backend/prediction/PredictionController.java) · [HTTP 테스트](../../src/test/java/dev/wattup/backend/prediction/PredictionApiTests.java) |
 | 7 | `GET /api/recommendations` | 최대 3곳 추천·추천 근거 | 핵심 | D | 구현 · 순위 기준 검토 중 | [Controller](../../src/main/java/dev/wattup/backend/station/RecommendationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/station/ChargingStationApiTests.java) |
-| 8 | `GET /api/locations/search` | 카카오 장소·주소 검색 프록시 | 추가 협의 | G | 미구현 | — |
-| 9 | `GET /api/locations/reverse-geocode` | 선택 좌표의 주소 표현 | 추가 협의 | G | 미구현 | — |
+| 8 | `GET /api/locations/search` | 카카오 장소·주소 검색 프록시 | 추가 협의 | G | 구현 · 실연동 대기 | [Controller](../../src/main/java/dev/wattup/backend/location/LocationController.java) · [루프백 HTTP](../../src/test/java/dev/wattup/backend/location/LocationApiTests.java) |
+| 9 | `GET /api/locations/reverse-geocode` | 선택 좌표의 주소 표현 | 추가 협의 | G | 구현 · 실연동 대기 | [Controller](../../src/main/java/dev/wattup/backend/location/LocationController.java) · [루프백 HTTP](../../src/test/java/dev/wattup/backend/location/LocationApiTests.java) |
 | 10 | `GET /api/charging-stations/{stationId}/patterns` | 요일·시간대 혼잡 이력 | 확장 | H | 미구현 | — |
 | 11 | `GET /api/charging-stations/{stationId}/turnover` | 관측 기준 회전율 | 확장 | H | 미구현 | — |
 | 12 | `GET /api/charging-stations/{stationId}/prediction-quality` | 예측과 관측 결과 비교 | 확장 | H | 미구현 | — |
@@ -110,12 +119,12 @@
 | 36 | `PATCH /api/users/me/agreements` | 선택 동의 수정 | 계정 협의 | F | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/AccountController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
 | 37 | `GET /api/users/me/sessions` | 로그인 중인 기기/세션 목록(선택) | 계정 협의 | F | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/AccountController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
 | 38 | `DELETE /api/users/me/sessions/{sessionId}` | 개별 세션 로그아웃(선택) | 계정 협의 | F | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/AccountController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
-| 39 | `GET /api/users/me/favorites` | 즐겨찾기 목록 | 계정 협의 | G | 미구현 | — |
-| 40 | `POST /api/users/me/favorites` | 즐겨찾기 등록 | 계정 협의 | G | 미구현 | — |
-| 41 | `DELETE /api/users/me/favorites/{stationId}` | 즐겨찾기 해제 | 계정 협의 | G | 미구현 | — |
-| 42 | `POST /api/users/me/favorites/import` | 비회원 로컬 즐겨찾기 계정 이전(선택) | 계정 협의 | G | 미구현 | — |
-| 43 | `GET /api/users/me/preferences` | 저장된 검색 조건 조회 | 계정 협의 | G | 미구현 | — |
-| 44 | `PATCH /api/users/me/preferences` | 검색 반경·기본 충전기 조건 변경 | 계정 협의 | G | 미구현 | — |
+| 39 | `GET /api/users/me/favorites` | 즐겨찾기 목록 | 계정 협의 | G | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/PersonalizationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 40 | `POST /api/users/me/favorites` | 즐겨찾기 등록 | 계정 협의 | G | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/PersonalizationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 41 | `DELETE /api/users/me/favorites/{stationId}` | 즐겨찾기 해제 | 계정 협의 | G | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/PersonalizationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 42 | `POST /api/users/me/favorites/import` | 비회원 로컬 즐겨찾기 계정 이전(선택) | 계정 협의 | G | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/PersonalizationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 43 | `GET /api/users/me/preferences` | 저장된 검색 조건 조회 | 계정 협의 | G | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/PersonalizationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
+| 44 | `PATCH /api/users/me/preferences` | 검색 반경·기본 충전기 조건 변경 | 계정 협의 | G | 구현 | [Controller](../../src/main/java/dev/wattup/backend/auth/PersonalizationController.java) · [HTTP/MySQL](../../src/test/java/dev/wattup/backend/auth/AuthApiTests.java) |
 | 45 | `GET /api/app/notices` | 점검·장애 안내 | 추가 협의 | H | 미구현 | — |
 | 46 | `POST /api/support/reports` | 이용 오류·정보 오류 신고 | 추가 협의 | H | 미구현 | — |
 | 47 | `POST /internal/ai/predictions/fixed30/batch` | Spring Boot → AI 고정 30분 예측(HTTP 어댑터 제안) | 내부 | H | FastAPI 담당 | AI 팀 HTTP 계약 대기 |
