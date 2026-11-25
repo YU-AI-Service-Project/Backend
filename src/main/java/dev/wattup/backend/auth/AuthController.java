@@ -1,5 +1,8 @@
 package dev.wattup.backend.auth;
 
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -43,11 +46,19 @@ class AuthController {
     }
 
     @PostMapping("/api/auth/social/kakao")
+    @ApiResponse(responseCode = "200", description = "Signed in", content = @Content(
+            mediaType = "application/json", schema = @Schema(implementation = AuthAccounts.Login.class)))
+    @ApiResponse(responseCode = "202", description = "Signup required", content = @Content(
+            mediaType = "application/json", schema = @Schema(implementation = AuthAccounts.Registration.class)))
     ResponseEntity<?> kakao(@RequestBody Kakao request, HttpServletRequest servlet) {
         return socialLogin("KAKAO", request.providerAccessToken, servlet);
     }
 
     @PostMapping("/api/auth/social/google")
+    @ApiResponse(responseCode = "200", description = "Signed in", content = @Content(
+            mediaType = "application/json", schema = @Schema(implementation = AuthAccounts.Login.class)))
+    @ApiResponse(responseCode = "202", description = "Signup required", content = @Content(
+            mediaType = "application/json", schema = @Schema(implementation = AuthAccounts.Registration.class)))
     ResponseEntity<?> google(@RequestBody Google request, HttpServletRequest servlet) {
         return socialLogin("GOOGLE", request.idToken, servlet);
     }

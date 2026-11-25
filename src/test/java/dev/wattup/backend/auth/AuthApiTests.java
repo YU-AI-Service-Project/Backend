@@ -21,11 +21,16 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -46,6 +51,7 @@ class AuthApiTests {
     private static final String PASSWORD = "SyntheticPassphrase-1";
     private static final String CHANGED = "SyntheticPassphrase-2";
     private static final String RESET = "SyntheticPassphrase-3";
+    private static final String OPS_READ = "R".repeat(43);
     private final JsonMapper json = new JsonMapper();
     private final HttpClient http = HttpClient.newHttpClient();
     private final String fixture = "Auth" + UUID.randomUUID().toString().substring(0, 8);
@@ -68,7 +74,9 @@ class AuthApiTests {
         application = new SpringApplicationBuilder(WattUpApplication.class, Stubs.class).run(
                 "--spring.datasource.url=" + url, "--wattup.collection.enabled=false",
                 "--server.port=0", "--server.address=127.0.0.1", "--wattup.auth.jwt-secret=" + testKey,
-                "--wattup.auth.email-secret=" + testKey, "--wattup.account.withdrawal-enabled=true");
+                "--wattup.auth.email-secret=" + testKey, "--wattup.account.withdrawal-enabled=true",
+                "--springdoc.api-docs.enabled=true", "--springdoc.swagger-ui.enabled=true",
+                "--wattup.internal.read-token=" + OPS_READ);
         db = application.getBean(JdbcTemplate.class);
         port = application.getEnvironment().getRequiredProperty("local.server.port", Integer.class);
         for (String type : List.of("TERMS", "PRIVACY")) {
@@ -109,6 +117,65 @@ class AuthApiTests {
             }
             http.close();
         }
+    }
+
+    @Test
+    void publishesExactlyTheSpringOperationsFromThe52ItemContract() throws Exception {
+        var row = Pattern.compile("^\\| (\\d+) \\| `((?:GET|POST|PATCH|DELETE) [^`]+)` \\|");
+        var expected = new HashSet<String>();
+        var ids = new HashSet<Integer>();
+        for (String line : Files.readAllLines(Path.of("docs/development/PROGRESS.md"))) {
+            var match = row.matcher(line);
+            if (match.find()) {
+                int id = Integer.parseInt(match.group(1));
+                assertThat(ids.add(id)).isTrue();
+                if (id != 47 && id != 48) {
+                    assertThat(expected.add(match.group(2))).isTrue();
+                }
+            }
+        }
+        assertThat(ids).hasSize(52).allMatch(id -> id >= 1 && id <= 52);
+        var response = http.send(HttpRequest.newBuilder(local("/v3/api-docs")).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(response.statusCode()).isEqualTo(200);
+        var paths = json.readTree(response.body()).path("paths");
+        var actual = new HashSet<String>();
+        paths.properties().forEach(path -> path.getValue().properties().forEach(method -> {
+            if (Set.of("get", "post", "patch", "delete").contains(method.getKey())) {
+                actual.add(method.getKey().toUpperCase(java.util.Locale.ROOT) + " " + path.getKey());
+            }
+        }));
+        assertThat(actual).hasSize(50).containsExactlyInAnyOrderElementsOf(expected);
+        var report = paths.path("/api/support/reports").path("post");
+        assertThat(report.at("/security/0/accessToken").isArray()).isTrue();
+        assertThat(report.at("/requestBody/content/application~1json/schema").isObject()).isTrue();
+        assertThat(report.at("/responses/201").isObject()).isTrue();
+        assertThat(paths.path("/api/auth/social/google").at("/post/responses/202").isObject()).isTrue();
+        assertThat(paths.path("/api/auth/logout").at("/post/responses/204/content").isMissingNode()).isTrue();
+        assertThat(paths.path("/internal/collector/runs").at("/post/security/0/internalWriteToken").isArray()).isTrue();
+        var ui = http.send(HttpRequest.newBuilder(local("/swagger-ui/index.html")).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(ui.statusCode()).isEqualTo(200);
+        assertThat(ui.body()).contains("Swagger UI");
+    }
+
+    @Test
+    void guardsInternalOperationsThroughTheActualHttpApp() throws Exception {
+        var path = local("/internal/collector/health");
+        var rejected = http.send(HttpRequest.newBuilder(path).GET().build(), HttpResponse.BodyHandlers.discarding());
+        assertThat(rejected.statusCode()).isEqualTo(401);
+        var allowed = http.send(HttpRequest.newBuilder(path).header("Authorization", "Bearer " + OPS_READ)
+                .GET().build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(allowed.statusCode()).isEqualTo(200);
+        assertThat(allowed.headers().firstValue("Cache-Control")).hasValue("no-store");
+        var forbidden = http.send(HttpRequest.newBuilder(local("/internal/collector/runs"))
+                .header("Authorization", "Bearer " + OPS_READ).header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{}")).build(), HttpResponse.BodyHandlers.discarding());
+        assertThat(forbidden.statusCode()).isEqualTo(403);
+    }
+
+    private URI local(String path) {
+        return URI.create("http://127.0.0.1:" + port + path);
     }
 
     @Test

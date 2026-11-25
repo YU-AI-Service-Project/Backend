@@ -142,3 +142,22 @@ Spring Boot는 수집이 완료된 MySQL 이력으로 30분 특징을 만들고,
 ## 장소·주소 조회
 
 `WATTUP_KAKAO_LOCAL_REST_API_KEY`에 서버용 카카오 로컬 REST 키를 설정한다. `GET /api/locations/search`는 1–100자의 검색어에 대해 키워드 결과를 반환하고 빈 자리를 주소 결과로 보완한다. `limit`의 기본값은 5, 범위는 1–15다. `GET /api/locations/reverse-geocode`는 WGS84 좌표의 도로명·지번 주소를 반환한다. 주소를 확인할 수 없는 경우에도 요청 좌표와 `선택한 위치`를 반환한다. 비회원도 두 API를 사용할 수 있다. [카카오 로컬 REST API](https://developers.kakao.com/docs/ko/local/dev-guide)
+
+## 분석·공지·신고
+
+- 충전소 분석은 완전한 지역 수집의 관측을 사용한다. 관측이 부족하면 `INSUFFICIENT_HISTORY`, 운영 평가가 준비되지 않은 예측 품질에는 `UNVERIFIED_MODEL`을 반환한다.
+- `GET /api/areas/charging-availability`는 가까운 후보 최대 30곳의 현재 관측 및 ETA 예측 집계를 제공한다. 0.75 이상인 유효 예측 수와 예측이 실제로 제공된 후보 수를 표시한다.
+- `GET /api/app/notices`는 활성 상태이며 게시 기간인 공지 목록을 반환한다. `POST /api/support/reports`는 JWT 인증이 필요하며 `STATION_INFORMATION`, `APP_ERROR`, `OTHER` 유형을 받는다. 계정당 한 시간에 최대 5회 요청할 수 있다.
+
+## 내부 운영과 OpenAPI
+
+| 환경변수 | 용도 |
+| --- | --- |
+| `WATTUP_INTERNAL_ALLOWED_ADDRESSES` | 연결을 허용하는 IP 리터럴 목록. 기본값은 `127.0.0.1,::1`이다. |
+| `WATTUP_INTERNAL_READ_TOKEN`, `WATTUP_INTERNAL_WRITE_TOKEN` | 서로 다른 43–128자리 Base64URL 형식 토큰. 읽기 토큰은 조회만 허용하며, 쓰기 토큰에는 조회 권한도 있다. |
+| `WATTUP_INTERNAL_MANUAL_COLLECTION_ENABLED` | 기본값 `false`. 수집 스케줄러와 함께 활성화하면 수동 `STATUS_FULL` 및 `STATUS_DELTA` 요청을 대기열에 등록한다. |
+| `WATTUP_AI_HEALTH_URL` | 선택 설정. FastAPI의 팀 합의 상태 URL. `status` 값이 `UP`, `OK`, `HEALTHY`이면 상류 서버가 응답 가능한 상태로 표시한다. |
+| `WATTUP_AI_HEALTH_TOKEN` | FastAPI 상태 확인이 인증을 요구할 때 사용하는 전용 토큰. |
+| `WATTUP_OPENAPI_ENABLED` | 기본값 `false`. 개발 환경에서 `/v3/api-docs`와 `/swagger-ui/index.html`을 제공한다. |
+
+운영에서는 공개 프록시에서 `/internal/**` 접근을 차단하고 별도 내부 연결을 사용한다. 수동 동기화는 기존 수집 잠금과 일일 공단 호출 한도를 공유한다. 요청이 접수되면 `202`와 실행 ID가 반환되며 이후 실행 이력에서 결과를 확인한다. AI 상태는 프로세스의 최근 유효 추론과 선택적인 상류 상태 확인을 함께 표시한다. 전체 경로와 외부 연동 상태는 [API 52개 추적표](docs/development/PROGRESS.md#api-52개-추적표)에 기록한다.
