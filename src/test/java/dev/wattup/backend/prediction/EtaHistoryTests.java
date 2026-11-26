@@ -85,6 +85,7 @@ class EtaHistoryTests {
         try (var app = new SpringApplicationBuilder(WattUpApplication.class, RouteFixture.class).run(
                 "--spring.datasource.url=" + url, "--wattup.collection.enabled=false", "--server.port=0",
                 "--server.address=127.0.0.1", "--wattup.prediction.ai-batch-url=" + base + "/arrival",
+                "--wattup.prediction.ai-feature-version=daegu-eta-v4",
                 "--wattup.prediction.ai-bearer-token=fixture", "--wattup.prediction.kakao-rest-api-key=",
                 "--wattup.prediction.quality-capture-enabled=true",
                 "--test.route-url=" + base + "/route", "--test.prediction-time=" + grid);
