@@ -45,12 +45,18 @@ class EtaHistoryTests {
     private static final Instant AS_OF = GRID_END.toInstant(ZoneOffset.UTC);
 
     @Test
-    void servesCurrentStatusAndValidatedEtaTogetherAndKeepsCurrentStatusOnAiFailure() throws Exception {
+    void ranksTopThreeWithV9AndKeepsCurrentStatusWhenForecastsAreInvalid() throws Exception {
         String url = System.getenv("WATTUP_TEST_DB_URL");
         if (!url.matches("jdbc:mysql://[^/?#]+/wattup_test(?:\\?[^#]*)?")) {
             throw new IllegalArgumentException("WATTUP_TEST_DB_URL must point to wattup_test");
         }
-        String station = "KECO:FLOW" + UUID.randomUUID().toString().substring(0, 8);
+        String prefix = "KECO:FLOW" + UUID.randomUUID().toString().substring(0, 8);
+        var stations = List.of(prefix + "1", prefix + "2", prefix + "3", prefix + "4");
+        var probabilities = Map.of(stations.get(0), 0.21, stations.get(1), 0.67,
+                stations.get(2), 0.42, stations.get(3), 0.82);
+        String featureVersion = "daegu-eta-v9-events-37";
+        String modelVersion = "wattup-eta-v9-20261126";
+        String batchPath = "/internal/v3/arrival-predictions/batch";
         String region = "XF";
         Instant now = Instant.now();
         Instant grid = Instant.ofEpochSecond(Math.floorDiv(now.getEpochSecond(), 300) * 300);
@@ -60,31 +66,45 @@ class EtaHistoryTests {
         var upstream = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         upstream.createContext("/route", exchange -> respond(exchange, json, Map.of("routes", List.of(
                 Map.of("result_code", 0, "summary", Map.of("duration", 600, "distance", 1800))))));
-        upstream.createContext("/arrival", exchange -> {
+        upstream.createContext(batchPath, exchange -> {
             var batch = json.readTree(exchange.getRequestBody());
-            var item = batch.path("items").get(0);
-            if (batch.path("items").size() != 1 || !station.equals(item.path("stationId").asText())
-                    || !"daegu-eta-v4".equals(batch.path("featureVersion").asText())
-                    || item.path("features").path("availableLag30").asInt() != 1) {
+            var items = batch.path("items");
+            if (items.size() != stations.size() || !featureVersion.equals(batch.path("featureVersion").asText())) {
                 respond(exchange, json, Map.of("invalidRequest", true));
                 return;
             }
             var forecast = grid.plusSeconds(invalidForecast.get() ? 900 : 600);
-            respond(exchange, json, Map.of("requestId", batch.path("requestId"), "items", List.of(Map.ofEntries(
-                    Map.entry("requestItemId", item.path("requestItemId")), Map.entry("stationId", station),
-                    Map.entry("profile", "AC_SLOW"), Map.entry("status", "OK"), Map.entry("probability", 0.82),
-                    Map.entry("modelVersion", "fixture-model"), Map.entry("featureVersion", "daegu-eta-v4"),
-                    Map.entry("etaSeconds", 600), Map.entry("roadDistanceM", 1800), Map.entry("horizonMinutes", 10),
-                    Map.entry("asOf", grid.toString()), Map.entry("requestAt", grid.toString()),
-                    Map.entry("requestedArrivalAt", grid.plusSeconds(600).toString()),
-                    Map.entry("forecastAt", forecast.toString()), Map.entry("featureAgeSeconds", 0),
-                    Map.entry("forecastRoundingSeconds", 0)))));
+            var predictions = new ArrayList<Map<String, Object>>();
+            for (var item : items) {
+                String station = item.path("stationId").asText();
+                var features = item.path("features");
+                if (!probabilities.containsKey(station) || features.size() != 38
+                        || features.path("availableLag30").asInt(-1) != 1
+                        || features.path("availabilityGains15").asInt(-1) != 0
+                        || features.path("coverageLast30m").asDouble(-1) != 1
+                        || features.path("historyKnown30m").asInt(-1) != 1) {
+                    respond(exchange, json, Map.of("invalidRequest", true));
+                    return;
+                }
+                predictions.add(Map.ofEntries(
+                        Map.entry("requestItemId", item.path("requestItemId")), Map.entry("stationId", station),
+                        Map.entry("profile", "AC_SLOW"), Map.entry("status", "OK"),
+                        Map.entry("probability", probabilities.get(station)),
+                        Map.entry("modelVersion", modelVersion), Map.entry("featureVersion", featureVersion),
+                        Map.entry("etaSeconds", 600), Map.entry("roadDistanceM", 1800), Map.entry("horizonMinutes", 10),
+                        Map.entry("asOf", grid.toString()), Map.entry("requestAt", grid.toString()),
+                        Map.entry("requestedArrivalAt", grid.plusSeconds(600).toString()),
+                        Map.entry("forecastAt", forecast.toString()), Map.entry("featureAgeSeconds", 0),
+                        Map.entry("forecastRoundingSeconds", 0)));
+            }
+            respond(exchange, json, Map.of("requestId", batch.path("requestId"), "items", predictions));
         });
         upstream.start();
         String base = "http://127.0.0.1:" + upstream.getAddress().getPort();
         try (var app = new SpringApplicationBuilder(WattUpApplication.class, RouteFixture.class).run(
                 "--spring.datasource.url=" + url, "--wattup.collection.enabled=false", "--server.port=0",
-                "--server.address=127.0.0.1", "--wattup.prediction.ai-batch-url=" + base + "/arrival",
+                "--server.address=127.0.0.1", "--wattup.prediction.ai-batch-url=" + base + batchPath,
+                "--wattup.prediction.ai-feature-version=" + featureVersion,
                 "--wattup.prediction.ai-bearer-token=fixture", "--wattup.prediction.kakao-rest-api-key=",
                 "--wattup.prediction.quality-capture-enabled=true",
                 "--test.route-url=" + base + "/route", "--test.prediction-time=" + grid);
@@ -93,47 +113,61 @@ class EtaHistoryTests {
             var runs = new ArrayList<Long>();
             try {
                 new TransactionTemplate(app.getBean(PlatformTransactionManager.class)).executeWithoutResult(tx -> {
-                    jdbc.update("INSERT INTO charging_stations (station_id,source_station_id,station_name,latitude,longitude)"
-                            + " VALUES (?,?,'Flow fixture',33.99117,127.22481)", station, station.substring(5));
-                    jdbc.update("INSERT INTO chargers (station_id,source_charger_id,charger_type_code,output_kw,inventory_region)"
-                            + " VALUES (?,'01','02',7,?)", station, region);
-                    long charger = jdbc.queryForObject("SELECT charger_id FROM chargers WHERE station_id=?", Long.class, station);
                     long full = run(jdbc, "STATUS_FULL", region, localGrid.minusMinutes(30), 0, true);
                     runs.add(full);
-                    observe(jdbc, charger, full, "2", "AVAILABLE", localGrid.minusMinutes(30));
                     for (int sample = 0; sample < 7; sample++) {
                         runs.add(run(jdbc, "STATUS_DELTA", region, localGrid.minusMinutes(30 - sample * 5), 0, true));
                     }
-                    jdbc.update("""
-                            INSERT INTO charger_current_status (charger_id,latest_observation_id,raw_status_code,
-                              normalized_status,last_observed_at)
-                            SELECT charger_id,observation_id,'2','AVAILABLE',? FROM charger_status_observations
-                            WHERE charger_id=? AND collection_run_id=?
-                            """, localGrid, charger, full);
+                    for (String station : stations) {
+                        jdbc.update("INSERT INTO charging_stations (station_id,source_station_id,station_name,latitude,longitude)"
+                                + " VALUES (?,?,'Flow fixture',33.99117,127.22481)", station, station.substring(5));
+                        jdbc.update("INSERT INTO chargers (station_id,source_charger_id,charger_type_code,output_kw,inventory_region)"
+                                + " VALUES (?,'01','02',7,?)", station, region);
+                        long charger = jdbc.queryForObject("SELECT charger_id FROM chargers WHERE station_id=?", Long.class, station);
+                        observe(jdbc, charger, full, "2", "AVAILABLE", localGrid.minusMinutes(30));
+                        jdbc.update("""
+                                INSERT INTO charger_current_status (charger_id,latest_observation_id,raw_status_code,
+                                  normalized_status,last_observed_at)
+                                SELECT charger_id,observation_id,'2','AVAILABLE',? FROM charger_status_observations
+                                WHERE charger_id=? AND collection_run_id=?
+                                """, localGrid, charger, full);
+                    }
                 });
                 int port = app.getEnvironment().getRequiredProperty("local.server.port", Integer.class);
                 var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port
-                        + "/api/recommendations?latitude=33.99117&longitude=127.22481&radiusM=100&profile=AC_SLOW"))
+                        + "/api/recommendations?latitude=33.99117&longitude=127.22481&radiusM=100"
+                        + "&profile=AC_SLOW&mode=ARRIVAL_ETA&limit=3"))
                         .timeout(Duration.ofSeconds(10)).GET().build();
                 for (boolean malformed : new boolean[]{false, true}) {
                     invalidForecast.set(malformed);
                     var response = http.send(request, HttpResponse.BodyHandlers.ofString());
                     assertThat(response.statusCode()).isEqualTo(200);
                     var result = json.readTree(response.body());
-                    var item = result.path("items").get(0);
-                    assertThat(item.path("stationId").asText()).isEqualTo(station);
-                    assertThat(item.path("current").path("freshAvailableCount").asInt()).isEqualTo(1);
-                    assertThat(item.path("etaSeconds").asInt()).isEqualTo(600);
-                    assertThat(item.path("prediction").path("status").asText())
-                            .isEqualTo(malformed ? "MODEL_UNAVAILABLE" : "OK");
-                    if (malformed) {
-                        assertThat(item.path("prediction").path("probability").isNull()).isTrue();
-                        assertThat(result.path("rankingBasis").asText()).isEqualTo("DISTANCE_CURRENT_STATUS_OUTPUT");
-                    } else {
-                        assertThat(item.path("prediction").path("probability").asDouble()).isEqualTo(0.82);
-                        assertThat(result.path("rankingBasis").asText()).isEqualTo("DISTANCE_CURRENT_STATUS_OUTPUT_PREDICTION");
+                    var items = result.path("items");
+                    var expectedOrder = malformed ? stations.subList(0, 3)
+                            : List.of(stations.get(3), stations.get(1), stations.get(2));
+                    assertThat(items.size()).isEqualTo(expectedOrder.size());
+                    assertThat(result.path("rankingBasis").asText()).isEqualTo(malformed
+                            ? "DISTANCE_CURRENT_STATUS_OUTPUT" : "DISTANCE_CURRENT_STATUS_OUTPUT_PREDICTION");
+                    for (int i = 0; i < expectedOrder.size(); i++) {
+                        var item = items.get(i);
+                        var prediction = item.path("prediction");
+                        String station = expectedOrder.get(i);
+                        assertThat(item.path("stationId").asText()).isEqualTo(station);
+                        assertThat(item.path("rank").asInt()).isEqualTo(i + 1);
+                        assertThat(item.path("current").path("freshAvailableCount").asInt()).isEqualTo(1);
+                        assertThat(item.path("etaSeconds").asInt()).isEqualTo(600);
+                        assertThat(prediction.path("featureVersion").asText()).isEqualTo(featureVersion);
+                        assertThat(prediction.path("status").asText()).isEqualTo(malformed ? "MODEL_UNAVAILABLE" : "OK");
+                        if (malformed) {
+                            assertThat(prediction.path("probability").isNull()).isTrue();
+                        } else {
+                            assertThat(prediction.path("probability").asDouble()).isEqualTo(probabilities.get(station));
+                            assertThat(prediction.path("modelVersion").asText()).isEqualTo(modelVersion);
+                        }
                     }
                 }
+                String station = stations.getLast();
                 String countSql = "SELECT COUNT(*) FROM eta_prediction_samples WHERE station_id=?";
                 long deadline = System.nanoTime() + Duration.ofSeconds(3).toNanos();
                 while (jdbc.queryForObject(countSql, Long.class, station) == 0 && System.nanoTime() < deadline) {
@@ -148,10 +182,12 @@ class EtaHistoryTests {
                 assertThat(unverified.statusCode()).isEqualTo(200);
                 assertThat(json.readTree(unverified.body()).path("dataSufficiency").asText()).isEqualTo("UNVERIFIED_MODEL");
             } finally {
-                jdbc.update("DELETE cs FROM charger_current_status cs JOIN chargers c USING (charger_id) WHERE c.station_id=?", station);
-                jdbc.update("DELETE o FROM charger_status_observations o JOIN chargers c USING (charger_id) WHERE c.station_id=?", station);
-                jdbc.update("DELETE FROM chargers WHERE station_id=?", station);
-                jdbc.update("DELETE FROM charging_stations WHERE station_id=?", station);
+                for (String station : stations) {
+                    jdbc.update("DELETE cs FROM charger_current_status cs JOIN chargers c USING (charger_id) WHERE c.station_id=?", station);
+                    jdbc.update("DELETE o FROM charger_status_observations o JOIN chargers c USING (charger_id) WHERE c.station_id=?", station);
+                    jdbc.update("DELETE FROM chargers WHERE station_id=?", station);
+                    jdbc.update("DELETE FROM charging_stations WHERE station_id=?", station);
+                }
                 runs.forEach(run -> jdbc.update("DELETE FROM collection_runs WHERE run_id=?", run));
             }
         } finally {
@@ -176,7 +212,8 @@ class EtaHistoryTests {
                 @Value("${test.route-url}") URI route, @Value("${test.prediction-time}") String time) {
             var clock = Clock.fixed(Instant.parse(time), ZoneOffset.UTC);
             var routes = new KakaoRouteClient(HttpClient.newHttpClient(), json, route, "fixture", Duration.ofSeconds(2), clock);
-            return new PredictionService(history, routes, ai, clock, Duration.ofSeconds(9), quality.getIfAvailable());
+            return new PredictionService(history, routes, ai, clock, Duration.ofSeconds(9), quality.getIfAvailable(),
+                    ai.featureVersion());
         }
     }
 
