@@ -4,6 +4,8 @@ WattUp의 Spring Boot 서버입니다.
 
 새 컴퓨터에서 시작할 때는 [로컬 서버 실행 가이드](docs/development/SETUP.md)를 참고하세요. 저장소 클론, MySQL 생성, 환경 변수, Swagger 확인 순서가 있습니다.
 
+도착 가용 예측 v9를 연결할 때는 [AI·DB 연동 가이드](docs/development/ETA_V9.md)를 참고하세요.
+
 ## 개발 요구사항
 
 - Java 25

@@ -10,10 +10,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 final class EtaFeatures {
     static final int SAMPLE_COUNT = 7;
     static final long GRID_SECONDS = 300;
+    static final Set<String> EVENT_KEYS = Set.of("availabilityLosses15", "availabilityGains15",
+            "chargeStarts30", "chargeEnds30", "availableAgeMin", "availableAgeKnownFraction",
+            "chargingElapsedMin", "recentChargingCount", "longChargingCount");
     private static final ZoneId MODEL_ZONE = ZoneId.of("Asia/Seoul");
 
     static Optional<Map<String, Number>> build(Instant asOf, ChargerProfile profile, List<List<Reading>> samples,
@@ -71,6 +75,36 @@ final class EtaFeatures {
         return Optional.of(Collections.unmodifiableMap(features));
     }
 
+    static Optional<Map<String, Number>> build(Instant asOf, ChargerProfile profile, List<List<Reading>> samples,
+                                               int reliableSamples, Movement movement) {
+        return build(asOf, profile, samples, reliableSamples, movement.changes()).map(core -> {
+            var features = new LinkedHashMap<>(core);
+            var current = samples.getLast();
+            var availableAges = current.stream().filter(r -> "2".equals(r.status) && r.providerStatusAt != null)
+                    .mapToDouble(r -> minutesSince(r.providerStatusAt, asOf))
+                    .filter(minutes -> minutes >= 0).map(minutes -> Math.min(2880, minutes)).summaryStatistics();
+            double[] chargingAges = current.stream().filter(r -> "3".equals(r.status) && r.chargeStartedAt != null)
+                    .mapToDouble(r -> minutesSince(r.chargeStartedAt, asOf))
+                    .filter(minutes -> minutes >= 0 && minutes <= 2880).toArray();
+            int available = core.get("availableCount").intValue();
+            features.put("availabilityLosses15", movement.losses15());
+            features.put("availabilityGains15", movement.gains15());
+            features.put("chargeStarts30", movement.starts30());
+            features.put("chargeEnds30", movement.ends30());
+            features.put("availableAgeMin", availableAges.getCount() == 0 ? 0 : availableAges.getMin());
+            features.put("availableAgeKnownFraction", available == 0 ? 0 : availableAges.getCount() / (double) available);
+            features.put("chargingElapsedMin", java.util.Arrays.stream(chargingAges).min().orElse(0));
+            features.put("recentChargingCount", java.util.Arrays.stream(chargingAges).filter(age -> age <= 10).count());
+            features.put("longChargingCount", java.util.Arrays.stream(chargingAges).filter(age -> age >= 90).count());
+            return Map.copyOf(features);
+        });
+    }
+
+    private static double minutesSince(Instant start, Instant end) {
+        var elapsed = Duration.between(start, end);
+        return elapsed.getSeconds() / 60.0 + elapsed.getNano() / 60_000_000_000.0;
+    }
+
     private static int availableCount(List<Reading> readings) {
         return (int) readings.stream().filter(reading -> reading.status.equals("2")).count();
     }
@@ -83,7 +117,20 @@ final class EtaFeatures {
         return readings.stream().filter(reading -> profile.includes(reading.typeCode)).count() / (double) readings.size();
     }
 
-    record Reading(String status, String typeCode, double outputKw, Instant chargeStartedAt) {
+    record Movement(int changes, int losses15, int gains15, int starts30, int ends30) {
+        static final Movement NONE = new Movement(0, 0, 0, 0, 0);
+
+        Movement plus(Movement other) {
+            return new Movement(changes + other.changes, losses15 + other.losses15, gains15 + other.gains15,
+                    starts30 + other.starts30, ends30 + other.ends30);
+        }
+    }
+
+    record Reading(String status, String typeCode, double outputKw, Instant chargeStartedAt, Instant providerStatusAt) {
+        Reading(String status, String typeCode, double outputKw, Instant chargeStartedAt) {
+            this(status, typeCode, outputKw, chargeStartedAt, null);
+        }
+
         boolean unknown() {
             return status == null || switch (status) {
                 case "2", "3", "4", "5", "6" -> false;

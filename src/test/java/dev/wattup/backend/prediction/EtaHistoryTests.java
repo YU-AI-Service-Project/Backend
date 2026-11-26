@@ -200,6 +200,7 @@ class EtaHistoryTests {
                 long charger = jdbc.queryForObject("SELECT charger_id FROM chargers WHERE station_id=?", Long.class, station);
                 long full = run(jdbc, "STATUS_FULL", "XY", GRID_END.minusMinutes(30), 0, true);
                 observe(jdbc, charger, full, "2", "AVAILABLE", GRID_END.minusMinutes(30));
+                long initialObservation = jdbc.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
                 for (int sample = 0; sample < 7; sample++) {
                     run(jdbc, "STATUS_DELTA", "XY", GRID_END.minusMinutes(30 - sample * 5), 0, true);
                 }
@@ -211,6 +212,37 @@ class EtaHistoryTests {
                 assertThat(result.statusPollAt()).isEqualTo(AS_OF);
                 assertThat(result.features()).containsEntry("availableCount", 1).containsEntry("availableLag30", 1)
                         .containsEntry("coverageLast30m", 1.0);
+
+                var start = GRID_END.minusMinutes(9);
+                long started = run(jdbc, "STATUS_DELTA", "XY", start, 0, true);
+                observe(jdbc, charger, started, "3", "CHARGING", start);
+                long chargingObservation = jdbc.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
+                insertChange(jdbc, charger, initialObservation, chargingObservation, "2", "3", start);
+                var end = GRID_END.minusMinutes(4);
+                long ended = run(jdbc, "STATUS_DELTA", "XY", end, 0, true);
+                observe(jdbc, charger, ended, "2", "AVAILABLE", end);
+                long availableObservation = jdbc.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
+                jdbc.update("UPDATE charger_status_observations SET provider_status_updated_at=? WHERE observation_id=?",
+                        end, availableObservation);
+                insertChange(jdbc, charger, chargingObservation, availableObservation, "3", "2", end);
+                var v9Features = history.load(List.of(station), ChargerProfile.AC_SLOW, AS_OF).get(station).features();
+                assertThat(v9Features)
+                        .containsEntry("availabilityLosses15", 1).containsEntry("availabilityGains15", 1)
+                        .containsEntry("chargeStarts30", 1).containsEntry("chargeEnds30", 1)
+                        .containsEntry("availableAgeMin", 4.0).containsEntry("availableAgeKnownFraction", 1.0);
+                String liveAi = System.getenv("WATTUP_TEST_AI_V9_URL");
+                if (liveAi != null && !liveAi.isBlank()) {
+                    try (var http = HttpClient.newHttpClient()) {
+                        var client = new EtaBatchClient(http, new JsonMapper(), URI.create(liveAi),
+                                System.getenv("WATTUP_TEST_AI_V9_TOKEN"), Duration.ofSeconds(3),
+                                EtaBatchClient.EVENT_FEATURE_VERSION);
+                        var item = new EtaBatchClient.Item("fixture", station, ChargerProfile.AC_SLOW, AS_OF,
+                                600, AS_OF, 1800, v9Features);
+                        var live = client.predict("db-event-fixture", AS_OF, List.of(item)).orElseThrow().get("fixture");
+                        assertThat(live.status()).isEqualTo("OK");
+                        assertThat(live.probability()).isBetween(0., 1.);
+                    }
+                }
 
                 jdbc.update("INSERT INTO chargers (station_id,source_charger_id,charger_type_code,output_kw,inventory_region)"
                         + " VALUES (?,'02','02',7,'XY')", station);
@@ -247,5 +279,13 @@ class EtaHistoryTests {
         jdbc.update("INSERT INTO charger_status_observations (charger_id, collection_run_id, raw_status_code,"
                 + " normalized_status, observed_at, source_event_fingerprint) VALUES (?, ?, ?, ?, ?, ?)",
                 charger, run, raw, normalized, observedAt, "a".repeat(64));
+    }
+
+    private static void insertChange(JdbcTemplate jdbc, long charger, long previous, long next,
+                                     String previousStatus, String nextStatus, LocalDateTime visibleAt) {
+        jdbc.update("""
+                INSERT INTO charger_state_changes (charger_id, previous_observation_id, new_observation_id,
+                   previous_status_code, new_status_code, change_observed_at) VALUES (?, ?, ?, ?, ?, ?)
+                """, charger, previous, next, previousStatus, nextStatus, visibleAt);
     }
 }

@@ -38,6 +38,7 @@ class EtaHistoryRepository {
     Map<String, Candidate> load(List<String> stationIds, ChargerProfile profile, Instant asOf) {
         var params = new MapSqlParameterSource("stations", stationIds)
                 .addValue("asOf", LocalDateTime.ofInstant(asOf, ZoneOffset.UTC))
+                .addValue("quarterStart", LocalDateTime.ofInstant(asOf.minusSeconds(900), ZoneOffset.UTC))
                 .addValue("windowStart", LocalDateTime.ofInstant(asOf.minusSeconds(1800), ZoneOffset.UTC));
         var accumulators = new HashMap<String, History>();
         jdbc.query("""
@@ -51,6 +52,7 @@ class EtaHistoryRepository {
                 """ + INVENTORY + """
                 )
                 SELECT c.*, g.sample_index, o.raw_status_code, o.charge_started_at,
+                  CASE WHEN o.provider_status_updated_at <= g.sample_time THEN o.provider_status_updated_at END AS provider_status_at,
                   CASE WHEN g.sample_index = 6 THEN (
                     SELECT MAX(delta.completed_at) FROM collection_runs delta
                     WHERE delta.region_code = c.inventory_region AND delta.run_type = 'STATUS_DELTA'
@@ -101,7 +103,13 @@ class EtaHistoryRepository {
                       SELECT s.station_id, c.charger_id, c.charger_type_code, c.inventory_region
                     """ + INVENTORY + """
                     )
-                    SELECT c.station_id, c.charger_type_code, COUNT(*) AS changes
+                    SELECT c.station_id, c.charger_type_code, COUNT(*) AS changes,
+                      SUM(ch.previous_status_code = '2' AND ch.new_status_code <> '2'
+                          AND r.completed_at > :quarterStart) AS losses_15,
+                      SUM(ch.previous_status_code <> '2' AND ch.new_status_code = '2'
+                          AND r.completed_at > :quarterStart) AS gains_15,
+                      SUM(ch.previous_status_code <> '3' AND ch.new_status_code = '3') AS starts_30,
+                      SUM(ch.previous_status_code = '3' AND ch.new_status_code <> '3') AS ends_30
                     FROM inventory c
                     JOIN charger_state_changes ch ON ch.charger_id = c.charger_id
                     JOIN charger_status_observations o ON o.observation_id = ch.new_observation_id
@@ -112,7 +120,10 @@ class EtaHistoryRepository {
                     GROUP BY c.station_id, c.charger_type_code
                     """, params, (RowCallbackHandler) row -> {
                 if (profile.includes(row.getString("charger_type_code"))) {
-                    accumulators.get(row.getString("station_id")).changes += row.getInt("changes");
+                    var history = accumulators.get(row.getString("station_id"));
+                    history.movement = history.movement.plus(new EtaFeatures.Movement(
+                            row.getInt("changes"), row.getInt("losses_15"), row.getInt("gains_15"),
+                            row.getInt("starts_30"), row.getInt("ends_30")));
                 }
             });
         }
@@ -121,7 +132,7 @@ class EtaHistoryRepository {
                 new Candidate(history.latitude, history.longitude, history.statusPollAt,
                         history.missingOutput ? null : history.minimumOutputKw, Map.copyOf(history.inventory),
                         EtaFeatures.build(asOf, profile, history.samples,
-                        history.reliableSamples(), history.changes).orElseGet(Map::of))));
+                        history.reliableSamples(), history.movement).orElseGet(Map::of))));
         return candidates;
     }
 
@@ -152,9 +163,11 @@ class EtaHistoryRepository {
             return;
         }
         LocalDateTime chargeStartedAt = row.getObject("charge_started_at", LocalDateTime.class);
+        LocalDateTime providerStatusAt = row.getObject("provider_status_at", LocalDateTime.class);
         history.samples.get(sampleIndex).add(new EtaFeatures.Reading(status, code,
                 outputKw == null ? 0 : outputKw.doubleValue(),
-                chargeStartedAt == null ? null : chargeStartedAt.toInstant(ZoneOffset.UTC)));
+                chargeStartedAt == null ? null : chargeStartedAt.toInstant(ZoneOffset.UTC),
+                providerStatusAt == null ? null : providerStatusAt.toInstant(ZoneOffset.UTC)));
         if (!row.getBoolean("reliable")) {
             history.unreliable[sampleIndex] = true;
         }
@@ -184,7 +197,7 @@ class EtaHistoryRepository {
         BigDecimal minimumOutputKw;
         boolean missingOutput;
         final Map<String, Long> inventory = new HashMap<>();
-        int changes;
+        EtaFeatures.Movement movement = EtaFeatures.Movement.NONE;
 
         History(Double latitude, Double longitude) {
             this.latitude = latitude;

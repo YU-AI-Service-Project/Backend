@@ -42,6 +42,26 @@ class EtaFeaturesTests {
     }
 
     @Test
+    void buildsNineV9SignalsFromTimestampedReadingsAndRecentTransitions() {
+        var current = List.of(
+                new EtaFeatures.Reading("2", "02", 7, null, AS_OF.minusSeconds(1020)),
+                new EtaFeatures.Reading("2", "02", 7, null, AS_OF.plusSeconds(1)),
+                new EtaFeatures.Reading("3", "04", 100, AS_OF.minusSeconds(480), null),
+                new EtaFeatures.Reading("3", "04", 100, AS_OF.minusSeconds(6000), null),
+                new EtaFeatures.Reading("3", "04", 100, AS_OF.plusSeconds(600), null));
+        var samples = java.util.Collections.nCopies(7, current);
+        var movement = new EtaFeatures.Movement(7, 1, 2, 3, 4);
+        var features = EtaFeatures.build(AS_OF, ChargerProfile.ALL, samples, 7, movement).orElseThrow();
+        assertThat(features).hasSize(38)
+                .containsEntry("observedChanges30m", 7)
+                .containsEntry("availabilityLosses15", 1).containsEntry("availabilityGains15", 2)
+                .containsEntry("chargeStarts30", 3).containsEntry("chargeEnds30", 4)
+                .containsEntry("availableAgeMin", 17.0).containsEntry("availableAgeKnownFraction", 0.5)
+                .containsEntry("chargingElapsedMin", 8.0)
+                .containsEntry("recentChargingCount", 1L).containsEntry("longChargingCount", 1L);
+    }
+
+    @Test
     void refusesACollectionGapOrUnknownChargerStatus() {
         var valid = List.of(new EtaFeatures.Reading("2", "04", 100, null));
         var unknown = List.of(new EtaFeatures.Reading("9", "04", 100, null));

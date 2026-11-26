@@ -29,6 +29,7 @@ import java.util.stream.Collectors;
 
 final class EtaBatchClient {
     static final String FEATURE_VERSION = "daegu-eta-v4";
+    static final String EVENT_FEATURE_VERSION = "daegu-eta-v9-events-37";
     static final int MAX_ITEMS = 30;
     private static final Set<String> FAILURE_STATUSES = Set.of("INPUT_INCOMPLETE", "STALE_FEATURES",
             "HORIZON_UNSUPPORTED", "INVALID_ETA_SECONDS", "FEATURE_TIME_AFTER_REQUEST", "ROUTE_MISSING",
@@ -39,15 +40,25 @@ final class EtaBatchClient {
     private final URI endpoint;
     private final String token;
     private final Duration timeout;
+    private final String featureVersion;
     private final Semaphore concurrentCalls = new Semaphore(4);
     private final AtomicReference<Activity> activity = new AtomicReference<>(new Activity(null, "NOT_ATTEMPTED", null, null, null));
 
     EtaBatchClient(HttpClient http, JsonMapper json, URI endpoint, String token, Duration timeout) {
+        this(http, json, endpoint, token, timeout, FEATURE_VERSION);
+    }
+
+    EtaBatchClient(HttpClient http, JsonMapper json, URI endpoint, String token, Duration timeout,
+                   String featureVersion) {
+        if (!Set.of(FEATURE_VERSION, EVENT_FEATURE_VERSION).contains(featureVersion)) {
+            throw new IllegalArgumentException("Unsupported prediction feature version");
+        }
         this.http = http;
         this.json = json;
         this.endpoint = endpoint;
         this.token = token;
         this.timeout = timeout;
+        this.featureVersion = featureVersion;
     }
 
     Optional<Map<String, Result>> predict(String requestId, Instant requestAt, List<Item> items) {
@@ -58,10 +69,47 @@ final class EtaBatchClient {
         String model = null;
         String state = "FAILED";
         try {
-            var body = new Batch(requestId, requestAt, FEATURE_VERSION, items);
+            boolean eventVersion = EVENT_FEATURE_VERSION.equals(featureVersion);
+            int batchSize = eventVersion ? 10 : MAX_ITEMS;
+            List<Item> wireItems = eventVersion ? items : items.stream().map(Item::withoutEventFeatures).toList();
+            var results = new HashMap<String, Result>();
+            boolean responded = false;
+            for (int offset = 0; offset < wireItems.size() && !Thread.currentThread().isInterrupted(); offset += batchSize) {
+                String batchId = wireItems.size() <= batchSize ? requestId : requestId + "-" + offset;
+                var batch = new Batch(batchId, requestAt, featureVersion,
+                        wireItems.subList(offset, Math.min(wireItems.size(), offset + batchSize)));
+                var result = requestBatch(batch);
+                if (result.isPresent()) {
+                    responded = true;
+                    results.putAll(result.get());
+                }
+            }
+            if (!responded) {
+                return Optional.empty();
+            }
+            model = results.values().stream().filter(result -> "OK".equals(result.status))
+                    .map(Result::modelVersion).sorted().findFirst().orElse(null);
+            state = results.isEmpty() ? "FAILED" : model == null ? "NO_RESULT" : "SUCCEEDED";
+            return Optional.of(Map.copyOf(results));
+        } finally {
+            recordActivity(state, model, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started));
+            concurrentCalls.release();
+        }
+    }
+
+    String featureVersion() {
+        return featureVersion;
+    }
+
+    private Optional<Map<String, Result>> requestBatch(Batch batch) {
+        try {
             var request = HttpRequest.newBuilder(endpoint).header("Content-Type", "application/json")
                     .header("Accept", "application/json").timeout(timeout)
-                    .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body)));
+                    .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(batch)));
+            if ("http".equals(endpoint.getScheme())) {
+                // The local ASGI server accepts HTTP/1.1 rather than a cleartext HTTP/2 upgrade.
+                request.version(HttpClient.Version.HTTP_1_1);
+            }
             if (!token.isBlank()) {
                 request.header("Authorization", "Bearer " + token);
             }
@@ -70,20 +118,13 @@ final class EtaBatchClient {
                 return Optional.empty();
             }
             JsonNode root = json.readTree(response.body());
-            if (root == null || !requestId.equals(root.path("requestId").asText()) || !root.path("items").isArray()
-                    || root.path("items").size() > MAX_ITEMS) {
+            if (root == null || !batch.requestId.equals(root.path("requestId").asText())
+                    || !root.path("items").isArray() || root.path("items").size() > batch.items.size()) {
                 return Optional.empty();
             }
-            var results = parseItems(root.path("items"), items, requestAt);
-            model = results.values().stream().filter(result -> "OK".equals(result.status))
-                    .map(Result::modelVersion).sorted().findFirst().orElse(null);
-            state = results.isEmpty() ? "FAILED" : model == null ? "NO_RESULT" : "SUCCEEDED";
-            return Optional.of(results);
+            return Optional.of(parseItems(root.path("items"), batch.items, batch.requestAt));
         } catch (JacksonException e) {
             return Optional.empty();
-        } finally {
-            recordActivity(state, model, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started));
-            concurrentCalls.release();
         }
     }
 
@@ -125,7 +166,7 @@ final class EtaBatchClient {
         return null;
     }
 
-    private static Map<String, Result> parseItems(JsonNode response, List<Item> items, Instant requestAt) {
+    private Map<String, Result> parseItems(JsonNode response, List<Item> items, Instant requestAt) {
         var expected = items.stream().collect(Collectors.toMap(Item::requestItemId, Function.identity()));
         var results = new HashMap<String, Result>();
         var seen = new HashSet<String>();
@@ -143,7 +184,7 @@ final class EtaBatchClient {
             String status = node.path("status").asText();
             if (FAILURE_STATUSES.contains(status)) {
                 results.put(id, new Result(status, null, null));
-            } else if ("OK".equals(status) && FEATURE_VERSION.equals(node.path("featureVersion").asText())) {
+            } else if ("OK".equals(status) && featureVersion.equals(node.path("featureVersion").asText())) {
                 JsonNode probability = node.path("probability");
                 String model = node.path("modelVersion").asText("");
                 if (probability.isNumber() && probability.asDouble() >= 0 && probability.asDouble() <= 1
@@ -186,6 +227,11 @@ final class EtaBatchClient {
 
     record Item(String requestItemId, String stationId, ChargerProfile profile, Instant asOf, int etaSeconds,
                 Instant etaGeneratedAt, int roadDistanceM, Map<String, Number> features) {
+        Item withoutEventFeatures() {
+            var core = new HashMap<>(features);
+            core.keySet().removeAll(EtaFeatures.EVENT_KEYS);
+            return new Item(requestItemId, stationId, profile, asOf, etaSeconds, etaGeneratedAt, roadDistanceM, core);
+        }
     }
 
     record Result(String status, Double probability, String modelVersion) {
