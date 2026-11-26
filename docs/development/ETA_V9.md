@@ -1,6 +1,6 @@
 # 도착 가용 예측 v9 연동
 
-v9의 추가 변수 9개는 기존 MySQL 테이블에서 읽습니다. [AI-Server 연동 브랜치](https://github.com/YU-AI-Service-Project/AI-Server/tree/feat/eta-v9-handoff)에서 모델 서버와 예제 요청을 실행한 뒤, 백엔드 실행 환경에 아래 값을 설정합니다.
+v9의 추가 변수 9개는 기존 MySQL 테이블에서 읽습니다. [AI-Server의 main 실행 가이드](https://github.com/YU-AI-Service-Project/AI-Server/blob/main/README.md)를 따라 모델 서버를 띄우고, `GET /health/ready`가 `UP`과 `wattup-eta-v9-20261126`을 반환하는지 확인합니다. FastAPI와 Spring Boot를 같은 호스트에서 실행하는 경우 백엔드에 아래 값을 설정하고 다시 시작합니다.
 
 | 이름 | 설정 |
 |---|---|
@@ -10,7 +10,7 @@ v9의 추가 변수 9개는 기존 MySQL 테이블에서 읽습니다. [AI-Serve
 | `WATTUP_AI_HEALTH_URL` | `http://127.0.0.1:8000/health/ready` |
 | `WATTUP_KAKAO_REST_API_KEY` | 기존 자동차 길찾기 키 |
 
-기본 입력 버전은 `daegu-eta-v4`입니다. v9를 선택할 때는 URL과 버전을 같이 설정하세요. 유효 후보가 10개를 넘는 기존 요청은 Java 클라이언트가 내부 AI 요청을 10개 이하로 나눠 응답을 합칩니다. 일반 앱 화면은 처음부터 후보를 최대 10개로 요청할 수 있습니다.
+기본 입력 버전은 `daegu-eta-v4`입니다. v9를 선택할 때는 URL과 버전을 같이 설정하세요. 다른 서버의 AI에 토큰을 전송할 때는 배치 URL에 HTTPS를 사용합니다. 유효 후보가 10개를 넘는 요청은 Java 클라이언트가 내부 AI 요청을 10개 이하로 나누고 응답을 합칩니다.
 
 ## DB 값의 출처
 
@@ -22,11 +22,15 @@ v9의 추가 변수 9개는 기존 MySQL 테이블에서 읽습니다. [AI-Serve
 
 ## 앱이 사용하는 경로
 
-1. `GET /api/charging-stations`의 `limit=10`, `availableOnly=false`, 동일한 `profile`로 주변 목록을 읽습니다.
-2. 그 목록의 ID와 출발 위치를 `POST /api/predictions/batch`로 한 번 보냅니다. `items[].prediction`에서 확률과 도로 거리, ETA를 읽고 `stationId`로 화면 목록에 합칩니다.
-3. 거리·확률 결합 순서가 필요하면 `2 * (roadDistanceM / 1000) + 15 * (1 - probability)`로 낮은 순서대로 표시합니다. 확률이 없는 후보도 현재 상태와 위치를 표시할 수 있습니다.
+Top-3 순위는 Spring Boot가 계산합니다. 앱은 `GET /api/recommendations`에 좌표와 `profile`, `mode=ARRIVAL_ETA`, `limit=3`을 보내고 `items[].rank` 순서로 표시합니다. `current`에서 현재 상태를, `etaSeconds`와 `prediction.probability`에서 도로 ETA와 도착 가용 확률을 읽습니다.
 
-예측 응답과 추가 필드 전체는 [AI-Server DB·API 가이드](https://github.com/YU-AI-Service-Project/AI-Server/blob/feat/eta-v9-handoff/docs/backend-db-integration.md)에 있습니다.
+`GET /api/charging-stations`와 `POST /api/predictions/batch`는 주변 목록과 후보별 예측을 따로 조회할 때 사용할 수 있습니다. FastAPI 입력과 결과의 상세 계약은 [AI-Server DB·API 가이드](https://github.com/YU-AI-Service-Project/AI-Server/blob/main/docs/backend-db-integration.md)를 참고합니다.
+
+## Spring에서 연결 확인
+
+1. `WATTUP_OPENAPI_ENABLED=true`로 실행한 Spring Swagger에서 단건 예측, 배치 예측, Top-3를 차례로 요청합니다.
+2. 예측 가능한 후보의 `prediction.status`가 `OK`이고, `prediction.modelVersion`이 `wattup-eta-v9-20261126`이며, `prediction.probability`가 0 이상 1 이하인지 확인합니다. Top-3에서는 Spring이 계산한 `rank`도 확인합니다.
+3. 상태 이력이 부족하면 `INPUT_INCOMPLETE`, 관측이 오래됐으면 `STALE_FEATURES`, 경로 ETA가 없으면 `ROUTE_UNAVAILABLE`이 표시될 수 있습니다. 운영용 상태 조회 `GET /internal/ai/health`는 내부 읽기 토큰이 필요하며, 유효한 추론이 최근에 성공한 뒤 `HEALTHY`가 됩니다.
 
 ## 테스트
 

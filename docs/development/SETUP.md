@@ -122,7 +122,7 @@ curl --fail-with-body 'http://127.0.0.1:8080/api/charging-stations?latitude=35.8
 | 공단 데이터 수집 | `WATTUP_KECO_ENABLED`, `WATTUP_KECO_SERVICE_KEY`, `WATTUP_KECO_REGION` | 승인된 환경에서 `true`, 디코딩된 공단 인증키, 두 자리 시·도 코드를 설정합니다. 활성화 시 서버 시작과 함께 API를 호출합니다. |
 | 공단 요청 설정 | `WATTUP_KECO_PAGE_SIZE`, `WATTUP_KECO_DAILY_LIMIT` | 기본값은 각각 `9999`, `1000`입니다. 승인된 요청 한도에 맞춥니다. |
 | 경로·장소 검색 | `WATTUP_KAKAO_REST_API_KEY`, `WATTUP_KAKAO_LOCAL_REST_API_KEY` | 각각 카카오모빌리티 자동차 경로와 카카오 로컬 검색에 사용합니다. |
-| ETA 예측 | `WATTUP_AI_ETA_BATCH_URL`, `WATTUP_AI_ETA_BEARER_TOKEN` | FastAPI 배치 전체 URL과 서버에서 인증을 요구할 경우 토큰을 설정합니다. 토큰을 전송하는 원격 URL은 HTTPS를 사용합니다. 도착 예측에는 카카오 경로 키와 수집 이력도 필요합니다. |
+| ETA 예측 | `WATTUP_AI_ETA_BATCH_URL`, `WATTUP_AI_ETA_FEATURE_VERSION`, `WATTUP_AI_ETA_BEARER_TOKEN` | FastAPI 배치 URL, 입력 버전, 필요한 경우 인증 토큰을 설정합니다. 토큰을 전송하는 원격 URL은 HTTPS를 사용합니다. 도착 예측에는 카카오 경로 키와 수집 이력도 필요합니다. [v9 연동 가이드](ETA_V9.md) |
 | ETA 예측 품질 | `WATTUP_PREDICTION_QUALITY_CAPTURE_ENABLED` | 기본값 `false`. `true`로 설정하면 앞으로 검증되는 예측의 평가 표본을 저장합니다. |
 | 추천 후보 수 | `WATTUP_RECOMMENDATION_CANDIDATE_LIMIT` | 기본값 `10`, 범위 `1–30`입니다. |
 | 회원 토큰 | `WATTUP_AUTH_JWT_SECRET` | 무작위 32바이트 이상의 값을 Base64로 인코딩합니다. |
