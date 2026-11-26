@@ -148,7 +148,7 @@ final class KecoCollector {
         }
 
         private String accept(KecoPage page, int number, LocalDateTime observedAt) {
-            if (page.pageNumber() != number || page.pageSize() != pageSize) {
+            if (page.pageNumber() != number) {
                 return "UPSTREAM_PAGE_MISMATCH";
             }
             if (totalCount == null) {
@@ -159,6 +159,9 @@ final class KecoCollector {
                 expectedPages = Math.max(1, Math.ceilDiv(totalCount, pageSize));
             }
             int expectedRows = Math.min(pageSize, totalCount - readings.size());
+            if (page.pageSize() != pageSize && page.pageSize() != expectedRows) {
+                return "UPSTREAM_PAGE_MISMATCH";
+            }
             if (totalCount != page.totalCount() || page.readings().size() != expectedRows) {
                 return "UPSTREAM_PAGE_COUNT_MISMATCH";
             }

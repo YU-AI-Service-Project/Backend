@@ -1,9 +1,18 @@
 package dev.wattup.backend.collection;
 
+import org.w3c.dom.Element;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
+import org.xml.sax.helpers.DefaultHandler;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import java.io.IOException;
+import java.io.StringReader;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -22,13 +31,11 @@ import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.regex.Pattern;
 
 final class KecoApiClient {
     static final ZoneId PROVIDER_ZONE = ZoneId.of("Asia/Seoul");
     private static final DateTimeFormatter SOURCE_TIMESTAMP = DateTimeFormatter.ofPattern("uuuuMMddHHmmss")
             .withResolverStyle(ResolverStyle.STRICT);
-    private static final Pattern XML_RESULT = Pattern.compile("<returnReasonCode>\\s*(\\d{1,2})\\s*</returnReasonCode>");
 
     private final HttpClient http;
     private final JsonMapper json;
@@ -49,7 +56,7 @@ final class KecoApiClient {
             query += "&period=10";
         }
         var request = HttpRequest.newBuilder(baseUri.resolve(endpoint.path + "?" + query))
-                .header("Accept", "application/json")
+                .header("Accept", "application/xml, application/json")
                 .timeout(timeout)
                 .GET()
                 .build();
@@ -85,9 +92,8 @@ final class KecoApiClient {
     }
 
     private KecoPage parse(String response) {
-        var xmlCode = XML_RESULT.matcher(response);
-        if (response.stripLeading().startsWith("<") && xmlCode.find()) {
-            throw providerFailure(xmlCode.group(1));
+        if (response.stripLeading().startsWith("<")) {
+            return parseXml(response);
         }
         JsonNode root;
         try {
@@ -102,16 +108,73 @@ final class KecoApiClient {
         JsonNode body = envelope.isMissingNode() ? root : envelope.path("body");
         String result = envelope.isMissingNode()
                 ? root.path("resultCode").asText("") : envelope.path("header").path("resultCode").asText("");
+        return page(result, body, body.path("items"));
+    }
+
+    private KecoPage parseXml(String response) {
+        try {
+            var factory = DocumentBuilderFactory.newDefaultInstance();
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            var parser = factory.newDocumentBuilder();
+            parser.setErrorHandler(new DefaultHandler());
+            Element root = parser.parse(new InputSource(new StringReader(response))).getDocumentElement();
+            if ("OpenAPI_ServiceResponse".equals(root.getTagName())) {
+                throw providerFailure(fields(child(root, "cmmMsgHeader")).path("returnReasonCode").asText(""));
+            }
+            if (!"response".equals(root.getTagName())) {
+                throw invalidPage();
+            }
+            var header = fields(child(root, "header"));
+            var items = child(child(root, "body"), "items");
+            var entries = json.createArrayNode();
+            if (items != null) {
+                for (var node = items.getFirstChild(); node != null; node = node.getNextSibling()) {
+                    if (node instanceof Element item && "item".equals(item.getTagName())) {
+                        entries.add(fields(item));
+                    }
+                }
+            }
+            return page(header.path("resultCode").asText(""), header, items == null ? null : entries);
+        } catch (ParserConfigurationException | SAXException | IOException e) {
+            throw invalidPage();
+        }
+    }
+
+    private static Element child(Element parent, String name) {
+        if (parent != null) {
+            for (var node = parent.getFirstChild(); node != null; node = node.getNextSibling()) {
+                if (node instanceof Element element && name.equals(element.getTagName())) {
+                    return element;
+                }
+            }
+        }
+        return null;
+    }
+
+    private ObjectNode fields(Element element) {
+        var fields = json.createObjectNode();
+        if (element != null) {
+            for (var node = element.getFirstChild(); node != null; node = node.getNextSibling()) {
+                if (node instanceof Element field) {
+                    fields.put(field.getTagName(), field.getTextContent().strip());
+                }
+            }
+        }
+        return fields;
+    }
+
+    private KecoPage page(String result, JsonNode pagination, JsonNode items) {
         if (!"00".equals(result) && !"0".equals(result)) {
             throw providerFailure(result);
         }
-        int pageNumber = body.path("pageNo").asInt(-1);
-        int pageSize = body.path("numOfRows").asInt(-1);
-        int totalCount = body.path("totalCount").asInt(-1);
-        if (pageNumber < 1 || pageSize < 1 || totalCount < 0) {
+        int pageNumber = pagination.path("pageNo").asInt(-1);
+        int pageSize = pagination.path("numOfRows").asInt(-1);
+        int totalCount = pagination.path("totalCount").asInt(-1);
+        if (pageNumber < 1 || pageSize < 0 || totalCount < 0 || (pageSize == 0 && totalCount > 0)) {
             throw invalidPage();
         }
-        return new KecoPage(pageNumber, pageSize, totalCount, parseItems(body.path("items"), totalCount));
+        return new KecoPage(pageNumber, pageSize, totalCount,
+                parseItems(items == null ? json.missingNode() : items, totalCount));
     }
 
     private List<KecoReading> parseItems(JsonNode items, int totalCount) {

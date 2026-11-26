@@ -60,6 +60,59 @@ class KecoApiClientTests {
     }
 
     @Test
+    void readsXmlInventoryWithPaginationInTheHeader() {
+        reply("getChargerInfo", 200, """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <response>
+                  <header><resultCode>00</resultCode><totalCount>11</totalCount>
+                    <pageNo>2</pageNo><numOfRows>10</numOfRows></header>
+                  <body><items><item>
+                    <statNm>대구 &amp; 테스트</statNm><statId>ME001234</statId><chgerId>01</chgerId>
+                    <stat>2</stat><statUpdDt>20261124121500</statUpdDt><nowTsdt/>
+                  </item></items></body>
+                </response>
+                """);
+
+        KecoPage page = client.fetch(KecoEndpoint.FULL_INVENTORY, "fixture", "27", 2, 10);
+
+        assertThat(page.pageNumber()).isEqualTo(2);
+        assertThat(page.pageSize()).isEqualTo(10);
+        assertThat(page.totalCount()).isEqualTo(11);
+        assertThat(page.readings()).singleElement().satisfies(reading -> {
+            assertThat(reading.stationId()).isEqualTo("ME001234");
+            assertThat(reading.chargerId()).isEqualTo("01");
+            assertThat(reading.attributes().path("statNm").asText()).isEqualTo("대구 & 테스트");
+            assertThat(reading.providerUpdatedAt()).isEqualTo(LocalDateTime.of(2026, 11, 24, 3, 15));
+            assertThat(reading.chargeStartedAt()).isNull();
+        });
+    }
+
+    @Test
+    void readsAnEmptyXmlStatusPage() {
+        reply("getChargerStatus", 200, """
+                <response><header><resultCode>00</resultCode><totalCount>0</totalCount>
+                  <pageNo>1</pageNo><numOfRows>0</numOfRows></header><body><items/></body></response>
+                """);
+
+        KecoPage page = client.fetch(KecoEndpoint.CHANGED_STATUS, "fixture", "27", 1, 10);
+
+        assertThat(page.totalCount()).isZero();
+        assertThat(page.readings()).isEmpty();
+    }
+
+    @Test
+    void rejectsXmlDocumentTypes() {
+        reply("getChargerInfo", 200, """
+                <!DOCTYPE response [<!ENTITY total "0">]>
+                <response><header><resultCode>00</resultCode><totalCount>&total;</totalCount>
+                  <pageNo>1</pageNo><numOfRows>10</numOfRows></header><body><items/></body></response>
+                """);
+
+        assertThatThrownBy(() -> client.fetch(KecoEndpoint.FULL_INVENTORY, "fixture", "27", 1, 10))
+                .isInstanceOf(KecoException.class).hasMessage("UPSTREAM_PAGE_INVALID");
+    }
+
+    @Test
     void readsFullInventoryWithoutPassingTheDeltaWindow() {
         reply("getChargerInfo", 200, """
                 {"resultCode":"00","pageNo":"1","numOfRows":"10","totalCount":"1","items":{"item":
