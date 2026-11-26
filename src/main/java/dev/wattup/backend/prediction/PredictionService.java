@@ -23,11 +23,11 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
 public final class PredictionService {
-    private static final String FEATURE_VERSION = EtaBatchClient.FEATURE_VERSION;
     private final EtaHistoryRepository history;
     private final KakaoRouteClient routes;
     private final EtaBatchClient ai;
     private final Clock clock;
+    private final String featureVersion;
     private final Duration routeBudget;
     private final PredictionQualityCapture quality;
     private final Semaphore activeBatches = new Semaphore(4);
@@ -44,12 +44,18 @@ public final class PredictionService {
 
     PredictionService(EtaHistoryRepository history, KakaoRouteClient routes, EtaBatchClient ai, Clock clock,
                       Duration routeBudget, PredictionQualityCapture quality) {
+        this(history, routes, ai, clock, routeBudget, quality, EtaBatchClient.FEATURE_VERSION);
+    }
+
+    PredictionService(EtaHistoryRepository history, KakaoRouteClient routes, EtaBatchClient ai, Clock clock,
+                      Duration routeBudget, PredictionQualityCapture quality, String featureVersion) {
         this.history = history;
         this.routes = routes;
         this.ai = ai;
         this.clock = clock;
         this.routeBudget = routeBudget;
         this.quality = quality;
+        this.featureVersion = featureVersion;
     }
 
     Batch predict(List<String> stationIds, ChargerProfile profile, PredictionController.Origin origin) {
@@ -202,14 +208,14 @@ public final class PredictionService {
         }
     }
 
-    private static Prediction result(String status, Instant asOf, Instant requestAt, KakaoRouteClient.Route route,
+    private Prediction result(String status, Instant asOf, Instant requestAt, KakaoRouteClient.Route route,
                                      ForecastTiming timing) {
         return new Prediction(status, null, asOf, requestAt, route == null ? null : route.requestedAt(),
                 route == null ? null : route.generatedAt(), route == null ? null : route.etaSeconds(),
                 route == null ? null : route.roadDistanceM(), route == null ? null : "KAKAO_DRIVING_DIRECTIONS",
                 timing == null ? null : timing.requestedArrivalAt(), timing == null ? null : timing.forecastAt(),
                 timing == null ? null : timing.horizonMinutes(), timing == null ? null : timing.forecastRoundingSeconds(),
-                timing == null ? null : timing.featureAgeSeconds(), null, FEATURE_VERSION);
+                timing == null ? null : timing.featureAgeSeconds(), null, featureVersion);
     }
 
     public record Batch(String requestId, List<StationPrediction> items) {
@@ -223,7 +229,8 @@ public final class PredictionService {
                       Instant requestedArrivalAt, Instant forecastAt, Integer horizonMinutes, Double forecastRoundingSeconds,
                       Double featureAgeSeconds, String modelVersion, String featureVersion) {
         public static Prediction unavailable() {
-            return result("MODEL_UNAVAILABLE", null, null, null, null);
+            return new Prediction("MODEL_UNAVAILABLE", null, null, null, null, null, null, null, null,
+                    null, null, null, null, null, null, EtaBatchClient.FEATURE_VERSION);
         }
 
         Prediction withInference(EtaBatchClient.Result result) {

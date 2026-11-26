@@ -45,6 +45,7 @@ wattup:
     kakao-rest-api-key: "${WATTUP_KAKAO_REST_API_KEY:}"
     ai-batch-url: "${WATTUP_AI_ETA_BATCH_URL:}"
     ai-bearer-token: "${WATTUP_AI_ETA_BEARER_TOKEN:}"
+    ai-feature-version: "${WATTUP_AI_ETA_FEATURE_VERSION:daegu-eta-v4}"
     ai-health-url: "${WATTUP_AI_HEALTH_URL:}"
     ai-health-token: "${WATTUP_AI_HEALTH_TOKEN:}"
   internal:
