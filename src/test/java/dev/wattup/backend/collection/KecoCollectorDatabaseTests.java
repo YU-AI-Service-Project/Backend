@@ -103,6 +103,24 @@ class KecoCollectorDatabaseTests {
     }
 
     @Test
+    void publishesInventoryWhenTheLastPageReportsItsActualRowCount() throws IOException {
+        String station = "TEST" + UUID.randomUUID().toString().substring(0, 8);
+        String readings = java.util.stream.IntStream.range(1, 11)
+                .mapToObj(number -> row(station + number, "2", "20261124120000", ""))
+                .collect(java.util.stream.Collectors.joining(","));
+        HttpServer upstream = upstream(request -> request.getRequestURI().getQuery().contains("pageNo=1")
+                ? page(1, 11, readings) : page(2, 1, 11, row(station + 11, "2", "20261124120000", "")));
+        try {
+            long run = collector(upstream).collect(KecoEndpoint.FULL_INVENTORY).orElseThrow();
+            assertThat(status(run)).isEqualTo("SUCCEEDED");
+            assertThat(jdbc.queryForObject("SELECT saved_observations FROM collection_runs WHERE run_id = ?",
+                    Integer.class, run)).isEqualTo(11);
+        } finally {
+            upstream.stop(0);
+        }
+    }
+
+    @Test
     void recordsAnIncompleteRunWithoutPublishingItsFirstPage() throws IOException {
         String station = "TEST" + UUID.randomUUID().toString().substring(0, 8);
         String readings = java.util.stream.IntStream.range(1, 11)
@@ -310,10 +328,14 @@ class KecoCollectorDatabaseTests {
     }
 
     private static String page(int page, int total, String rows) {
+        return page(page, 10, total, rows);
+    }
+
+    private static String page(int page, int size, int total, String rows) {
         return """
-                {"response":{"header":{"resultCode":"00"},"body":{"pageNo":%d,"numOfRows":10,"totalCount":%d,
+                {"response":{"header":{"resultCode":"00"},"body":{"pageNo":%d,"numOfRows":%d,"totalCount":%d,
                 "items":{"item":[%s]}}}}
-                """.formatted(page, total, rows);
+                """.formatted(page, size, total, rows);
     }
 
     private static String row(String station, String status, String updated, String started) {
